@@ -1,0 +1,1030 @@
+// ============================================================================
+// Inquisitron suspicion rules
+//
+// Tuned for the Securonix Threat Research SMOKE#SCREEN advisory (July 28, 2026)
+// demo station: zoom-update.vbs and SystemCheck sample detonations.
+//
+// Schema per rule:
+//   name         short label shown in the Detection column
+//   description  why it fired (tooltip / export / AI context)
+//   severity     critical | high | medium | low   (drives row color; most severe rule wins)
+//   eventIds     Sysmon event IDs this rule applies to; omit = all events
+//   parent       regex on the PARENT executable file name  (anchored, whole name)
+//   child        regex on the CHILD/Image executable file name (anchored, whole name)
+//   all          [ {field, regex, not?} ]  every entry must match
+//   any          [ {field, regex, not?} ]  at least one entry must match
+//
+// "field" is any Sysmon EventData field (CommandLine, ParentCommandLine,
+// TargetFilename, TargetObject, DestinationIp, DestinationHostname, QueryName,
+// Details, ...) plus the pseudo-fields Image, ImageName, ParentImage,
+// ParentImageName, and "Any" (matches against every field value).
+// Field regexes are SUBSTRING matches; parent/child regexes are whole-name.
+//
+// Sysmon event IDs used below: 1 process create, 3 network connect,
+// 11 file create, 12/13 registry, 22 DNS query, 23/26 file delete.
+// ============================================================================
+[
+
+  // ==========================================================================
+  // SMOKE#SCREEN — Sample 1: zoom-update.vbs (XOR-encrypted VBScript dropper)
+  // Chain: wscript -> hidden powershell -> in-memory C# compile -> MSI -> RMM
+  // ==========================================================================
+
+  {
+    "name": "SMOKE#SCREEN: VBScript dropper spawned PowerShell",
+    "description": "Script host launched PowerShell with a hidden window — matches zoom-update.vbs calling objShell.Run payload, 0, False after its XOR-decrypt stage",
+    "severity": "critical",
+    "eventIds": [1],
+    "parent": "(wscript|cscript)\\.exe",
+    "child": "(powershell|pwsh)\\.exe"
+  },
+
+  {
+    "name": "SMOKE#SCREEN: in-memory C# compile",
+    "description": "PowerShell compiled C# in memory via Add-Type -Language CSharp — zoom-update.vbs compiles working_payload.cs and invokes [HelloWorld.Program]::SayHello()",
+    "severity": "critical",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "Add-Type[^\\n]*-Language\\s+CSharp" },
+      { "field": "CommandLine", "regex": "HelloWorld\\.Program" },
+      { "field": "CommandLine", "regex": "SayHello" },
+      { "field": "CommandLine", "regex": "working_payload\\.cs" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: /Bin/ staging path",
+    "description": "Download referencing the actor's /Bin/ URL path convention — shared by zoom-update.vbs and RSKAdvGrpSupportingdocuments.vbs, linking both to the same operator",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "/Bin/[A-Za-z0-9_.\\-]+" },
+      { "field": "ParentCommandLine", "regex": "/Bin/[A-Za-z0-9_.\\-]+" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: VBScript launched from user-writable path",
+    "description": "Script host executing a .vbs from Downloads/TEMP/Public — the zoom-update.vbs and RSKAdvGrpSupportingdocuments.vbs initial access vector",
+    "severity": "high",
+    "eventIds": [1],
+    "child": "(wscript|cscript)\\.exe",
+    "all": [
+      { "field": "CommandLine", "regex": "\\.vbs" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "\\\\Downloads\\\\" },
+      { "field": "CommandLine", "regex": "\\\\AppData\\\\Local\\\\Temp\\\\" },
+      { "field": "CommandLine", "regex": "\\\\Users\\\\Public\\\\" },
+      { "field": "CommandLine", "regex": "zoom-?update" },
+      { "field": "CommandLine", "regex": "RSKAdvGrp" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: WMI process-creation dropper",
+    "description": "Win32_Process.Create used to spawn a hidden process — RSKAdvGrpSupportingdocuments.vbs uses WMI instead of WScript.Shell to dodge script-host detections",
+    "severity": "high",
+    "eventIds": [1],
+    "parent": "wmiprvse\\.exe",
+    "child": "(cmd|powershell|pwsh|mshta|rundll32|regsvr32|bitsadmin|certutil|msiexec)\\.exe"
+  },
+
+  // ==========================================================================
+  // SMOKE#SCREEN — Sample 3: SystemCheck (security-killing batch file)
+  // Chain: cmd -> AMSI bypass -> UAC -> SmartScreen teardown -> Defender
+  //        exclusions -> MotW strip -> msiexec /qn -> self-delete
+  // ==========================================================================
+
+  {
+    "name": "SMOKE#SCREEN: AMSI bypass",
+    "description": "Reflection-based AMSI patch (amsiInitFailed) — SystemCheck Stage 1 blinds AMSI before any other PowerShell runs",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "amsiInitFailed" },
+      { "field": "CommandLine", "regex": "AmsiUtils" },
+      { "field": "CommandLine", "regex": "AmsiScanBuffer" },
+      { "field": "CommandLine", "regex": "System\\.Management\\.Automation\\.Ams" }
+    ]
+  },
+
+  // Rule order matters on a severity tie: the engine keeps file order among
+  // equal severities, so the specific drive-root rule sits above the generic
+  // exclusion rule.
+  {
+    "name": "SMOKE#SCREEN: Defender blinded to entire drive",
+    "description": "Drive-root Defender exclusion — MemoryLoader.cs adds C:\\ as an exclusion path, blinding Defender to the whole filesystem",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "-ExclusionPath\\s+['\"]?[A-Za-z]:\\\\?['\"]?(?![\\\\\\w])" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: Defender exclusion added",
+    "description": "Add-MpPreference created a Defender exclusion — SystemCheck Stage 4 excludes the TEMP directory and the MSI path before downloading",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "(Add|Set)-MpPreference[^\\n]*-Exclusion(Path|Extension|Process)" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: Defender service killed",
+    "description": "WinDefend stopped, disabled, or realtime monitoring turned off — part of the nine-step Defender destruction sequence that completes within 15 seconds",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "(Stop|Set)-Service[^\\n]*WinDefend" },
+      { "field": "CommandLine", "regex": "sc(\\.exe)?\\s+(stop|config)\\s+windefend" },
+      { "field": "CommandLine", "regex": "-DisableRealtimeMonitoring\\s+\\$?true" },
+      { "field": "CommandLine", "regex": "-DisableBehaviorMonitoring\\s+\\$?true" },
+      { "field": "CommandLine", "regex": "-DisableIOAVProtection\\s+\\$?true" },
+      { "field": "CommandLine", "regex": "-DisableScriptScanning\\s+\\$?true" },
+      { "field": "CommandLine", "regex": "MpCmdRun[^\\n]*-RemoveDefinitions" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: SmartScreen disabled",
+    "description": "Registry write disabling SmartScreen reputation checks — SystemCheck Stage 3 clears the way for an unsigned-looking download",
+    "severity": "critical",
+    "eventIds": [12, 13],
+    "any": [
+      { "field": "TargetObject", "regex": "SmartScreenEnabled" },
+      { "field": "TargetObject", "regex": "\\\\Explorer\\\\ShellSmartScreenLevel" },
+      { "field": "TargetObject", "regex": "\\\\System\\\\EnableSmartScreen" },
+      { "field": "TargetObject", "regex": "Policies\\\\Microsoft\\\\Windows Defender" },
+      { "field": "TargetObject", "regex": "SmartScreenEnabledV9" }
+    ]
+  },
+
+  // Must be an actual registry WRITE targeting SmartScreen policy. Matching the
+  // bare string "SmartScreen" flags C:\Windows\System32\smartscreen.exe -Embedding,
+  // which is just Windows starting its own SmartScreen host via COM.
+  {
+    "name": "SMOKE#SCREEN: SmartScreen disabled via command line",
+    "description": "Command-line registry edit targeting SmartScreen policy — SystemCheck Stage 3 disables SmartScreen before restarting Explorer",
+    "severity": "critical",
+    "eventIds": [1],
+    "child": "(reg|powershell|pwsh|cmd)\\.exe",
+    "all": [
+      { "field": "CommandLine", "regex": "SmartScreen" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "reg(\\.exe)?\\s+(add|delete)" },
+      { "field": "CommandLine", "regex": "(Set|New|Remove)-ItemProperty" },
+      { "field": "CommandLine", "regex": "Set-MpPreference" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: Explorer restarted to apply policy",
+    "description": "Explorer forcibly killed — SystemCheck Stage 3 restarts the shell so its SmartScreen registry changes take effect immediately",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "taskkill[^\\n]*explorer\\.exe" },
+      { "field": "CommandLine", "regex": "Stop-Process[^\\n]*explorer" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: Mark-of-the-Web stripped",
+    "description": "Zone.Identifier alternate data stream removed — SystemCheck Stage 5 uses Unlock-File so the downloaded MSI installs without a MotW warning",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "Unlock-File" },
+      { "field": "CommandLine", "regex": "Zone\\.Identifier" },
+      { "field": "TargetFilename", "regex": "Zone\\.Identifier" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: UAC self-elevation",
+    "description": "Process relaunched itself elevated — SystemCheck Stage 2 re-runs under UAC, trading on its 'maintenance utility' filename to win approval",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "-Verb\\s+['\"]?RunAs" },
+      { "field": "ParentCommandLine", "regex": "-Verb\\s+['\"]?RunAs" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: SystemCheck masquerade filename",
+    "description": "Campaign masquerade filename observed — SystemCheck downloads SystemCheck.msi but writes it to TEMP as WindowsExplorerSupport.msi to blend in with Windows components",
+    "severity": "critical",
+    "any": [
+      { "field": "Any", "regex": "WindowsExplorerSupport" },
+      { "field": "Any", "regex": "SystemCheck\\.(msi|exe|gzip)" },
+      { "field": "Any", "regex": "AdobeReader_Update\\.exe" },
+      { "field": "Any", "regex": "Zoomupdateinstaller" },
+      { "field": "Any", "regex": "Document-?[Rr]eview\\.msi" },
+      { "field": "Any", "regex": "Document-Viewer\\.exe" },
+      { "field": "Any", "regex": "(lirMkvpf|NYbiLtvO|BuYUEVqG|JqbMljCi|zFbJVuiX)\\." }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: batch dropper spawned PowerShell",
+    "description": "cmd.exe launched PowerShell with hidden window / policy bypass — the SystemCheck batch file drives every stage through hidden PowerShell instances",
+    "severity": "high",
+    "eventIds": [1],
+    "parent": "cmd\\.exe",
+    "child": "(powershell|pwsh)\\.exe",
+    "any": [
+      { "field": "CommandLine", "regex": "-(w|windowstyle)\\s+h" },
+      { "field": "CommandLine", "regex": "-(ep|exec|executionpolicy)\\s+bypass" },
+      { "field": "CommandLine", "regex": "-nop" },
+      { "field": "CommandLine", "regex": "-noni" },
+      { "field": "CommandLine", "regex": "\\s-[eE][ncodemas]*\\s+[A-Za-z0-9+/=]{40,}" }
+    ]
+  },
+
+  // ==========================================================================
+  // SMOKE#SCREEN — shared infrastructure (staging server, relays, tunnels)
+  // ==========================================================================
+
+  {
+    "name": "SMOKE#SCREEN: C2 network connection",
+    "description": "Network connection to a known SMOKE#SCREEN staging server or ScreenConnect relay (207.174.0.143 / 142.202.191.225 / 207.189.11.170)",
+    "severity": "critical",
+    "eventIds": [3],
+    "any": [
+      { "field": "DestinationIp", "regex": "^207\\.174\\.0\\.143$" },
+      { "field": "DestinationIp", "regex": "^142\\.202\\.191\\.225$" },
+      { "field": "DestinationIp", "regex": "^207\\.189\\.11\\.170$" },
+      { "field": "DestinationHostname", "regex": "derrspecial-onlinedmin" },
+      { "field": "DestinationHostname", "regex": "crestmarkhq" },
+      { "field": "DestinationHostname", "regex": "trycloudflare\\.com" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: C2 host in command line",
+    "description": "Command line references SMOKE#SCREEN infrastructure — staging server 207.174.0.143:8080, the former C# host 207.189.11.170, or a relay",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "207\\.174\\.0\\.143" },
+      { "field": "CommandLine", "regex": "142\\.202\\.191\\.225" },
+      { "field": "CommandLine", "regex": "207\\.189\\.11\\.170" },
+      { "field": "CommandLine", "regex": "derrspecial-onlinedmin" },
+      { "field": "CommandLine", "regex": "crestmarkhq" },
+      { "field": "CommandLine", "regex": "subscription-magnetic-recommended-meat" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: C2 DNS lookup",
+    "description": "DNS query for SMOKE#SCREEN infrastructure — Cloudflare Quick Tunnel, the fake admin-portal relay, or the Cloudflare-proxied MSI host",
+    "severity": "critical",
+    "eventIds": [22],
+    "any": [
+      { "field": "QueryName", "regex": "derrspecial-onlinedmin" },
+      { "field": "QueryName", "regex": "crestmarkhq" },
+      { "field": "QueryName", "regex": "subscription-magnetic-recommended-meat" },
+      { "field": "QueryResults", "regex": "207\\.174\\.0\\.143" },
+      { "field": "QueryResults", "regex": "142\\.202\\.191\\.225" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: Cloudflare Quick Tunnel",
+    "description": "trycloudflare.com reference — the actor runs cloudflared.exe on their staging server to generate ephemeral tunnels for MSI delivery; these are rarely monitored",
+    "severity": "high",
+    "any": [
+      { "field": "QueryName", "regex": "trycloudflare\\.com" },
+      { "field": "CommandLine", "regex": "trycloudflare\\.com" },
+      { "field": "DestinationHostname", "regex": "trycloudflare\\.com" },
+      { "field": "ImageName", "regex": "^cloudflared\\.exe$" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: Dropbox payload delivery",
+    "description": "Dropbox shared-link download — zoom-update.html hosts its MSI on Dropbox to bypass domain reputation filtering, and auto-downloads after a 2-second JS timer",
+    "severity": "high",
+    "any": [
+      { "field": "CommandLine", "regex": "dropbox\\.com/scl/fi/" },
+      { "field": "QueryName", "regex": "^(dl|www)\\.dropbox(usercontent)?\\.com$" }
+    ]
+  },
+
+  {
+    "name": "Download from raw IP address",
+    "description": "Script downloaded content from a bare IP rather than a hostname — SMOKE#SCREEN serves both its C# source and its MSIs from raw IPs",
+    "severity": "high",
+    "any": [
+      { "field": "CommandLine", "regex": "(DownloadString|DownloadFile|DownloadData|Invoke-WebRequest|Invoke-RestMethod|\\biwr\\b|\\bcurl\\b|\\bwget\\b|BitsTransfer)[^\\n]*https?://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" }
+    ]
+  },
+
+  // ==========================================================================
+  // SMOKE#SCREEN — final payload: ScreenConnect RMM agent
+  // ==========================================================================
+
+  {
+    "name": "SMOKE#SCREEN: ScreenConnect guest-access install",
+    "description": "ScreenConnect client configured with e=Access&y=Guest — the default ConnectWise guest session parameters used by every SMOKE#SCREEN payload",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "e=Access&y=Guest" },
+      { "field": "CommandLine", "regex": "[?&]e=Access" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: ScreenConnect agent activity",
+    "description": "ScreenConnect / ConnectWise RMM binary running — the campaign's final payload is a legitimately DigiCert-signed ConnectWise MSI, so code-signing checks will not catch it",
+    "severity": "critical",
+    "any": [
+      { "field": "Image", "regex": "ScreenConnect" },
+      { "field": "ParentImage", "regex": "ScreenConnect" },
+      { "field": "TargetFilename", "regex": "ScreenConnect" },
+      { "field": "ImageLoaded", "regex": "ScreenConnect" },
+      { "field": "CommandLine", "regex": "ScreenConnect" },
+      { "field": "TargetObject", "regex": "ScreenConnect" },
+      { "field": "Service", "regex": "ScreenConnect" }
+    ]
+  },
+
+  {
+    "name": "Unauthorized RMM agent",
+    "description": "Remote monitoring and management tool activity — inventory approved RMM tools and alert on anything else, especially connecting to raw IPs",
+    "severity": "high",
+    "any": [
+      { "field": "Image", "regex": "(anydesk|teamviewer|atera|splashtop|ngrok|rustdesk|logmein|gotoassist|dwagent)" },
+      { "field": "TargetFilename", "regex": "(anydesk|teamviewer|atera|splashtop|ngrok|rustdesk|logmein|gotoassist|dwagent)" }
+    ]
+  },
+
+  {
+    "name": "SMOKE#SCREEN: silent MSI install",
+    "description": "msiexec installing silently from a user-writable path — every SMOKE#SCREEN kill chain ends with msiexec /qn against a TEMP-staged ScreenConnect MSI",
+    "severity": "critical",
+    "eventIds": [1],
+    "child": "msiexec\\.exe",
+    "any": [
+      { "field": "CommandLine", "regex": "/(qn|quiet|qb)[^\\n]*(\\\\Temp\\\\|\\\\AppData\\\\|\\\\Users\\\\Public\\\\|\\\\Downloads\\\\)" },
+      { "field": "CommandLine", "regex": "(\\\\Temp\\\\|\\\\AppData\\\\|\\\\Users\\\\Public\\\\|\\\\Downloads\\\\)[^\\n]*/(qn|quiet|qb)" },
+      { "field": "CommandLine", "regex": "/(qn|quiet)[^\\n]*https?://" }
+    ]
+  },
+
+  {
+    "name": "Shell spawned msiexec silently",
+    "description": "powershell.exe or cmd.exe launching msiexec with silent-install flags — the anomalous parent-child relationship called out in the SMOKE#SCREEN recommendations",
+    "severity": "high",
+    "eventIds": [1],
+    "parent": "(cmd|powershell|pwsh|wscript|cscript|mshta)\\.exe",
+    "child": "msiexec\\.exe"
+  },
+
+  {
+    "name": "SMOKE#SCREEN: installer self-delete",
+    "description": "MSI or EXE deleted from a user-writable path — SystemCheck and MemoryLoader both delete the installer after execution to remove the primary disk artifact",
+    "severity": "high",
+    "eventIds": [23, 26],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\.(msi|exe)$" }
+    ],
+    "any": [
+      { "field": "TargetFilename", "regex": "\\\\AppData\\\\Local\\\\Temp\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Users\\\\Public\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Downloads\\\\" }
+    ]
+  },
+
+  {
+    "name": "Installer dropped in user-writable path",
+    "description": "MSI or EXE written to TEMP, Public, or Downloads — the staging step before every SMOKE#SCREEN silent install",
+    "severity": "medium",
+    "eventIds": [11],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\.(exe|msi|scr|ps1|vbs|bat|cmd|gzip|vhd|vhdx|iso|lnk)$" }
+    ],
+    "any": [
+      { "field": "TargetFilename", "regex": "\\\\AppData\\\\Local\\\\Temp\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Users\\\\Public\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Downloads\\\\" }
+    ]
+  },
+
+  // ==========================================================================
+  // DEAD#VAX — IPFS-delivered VHD -> WSF -> obfuscated batch -> renamed PowerShell
+  //
+  // Chain: phishing link to an IPFS gateway -> PurchaseOrder_..._Docx.vhd ->
+  // user double-clicks, Windows mounts it as E: (MotW bypass) -> .pdf.wsf on the
+  // mounted volume -> VBScript decrypts (strip ctrl chars, base64 via MSXML,
+  // rolling XOR) -> drops random-named .bat in %TEMP%\temp -> batch does
+  // anti-analysis, copies itself to rEgX.cmd, runs mbs.exe (renamed powershell)
+  // to read its own trailing "@ " lines out to windows.dll.
+  // ==========================================================================
+
+  {
+    "name": "DEAD#VAX: renamed LOLBin",
+    "description": "Process whose PE OriginalFileName is a system LOLBin but whose filename on disk is something else — DEAD#VAX runs mbs.exe, a renamed copy of powershell.exe, to dodge name-based detections",
+    "severity": "critical",
+    "eventIds": [1],
+    "all": [
+      { "field": "OriginalFileName", "regex": "^(cmd|mshta|rundll32|regsvr32|certutil|bitsadmin|wscript|cscript|msiexec|powershell|pwsh)\\.exe$" },
+      { "field": "ImageName", "regex": "^(cmd|mshta|rundll32|regsvr32|certutil|bitsadmin|wscript|cscript|msiexec|powershell|pwsh)\\.exe$", "not": true }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: campaign artifact filename",
+    "description": "Known DEAD#VAX artifact — mbs.exe (renamed powershell), rEgX.cmd (self-copy the loader reads back), or windows.dll (base64 payload masquerading as a library)",
+    "severity": "critical",
+    "any": [
+      { "field": "Any", "regex": "\\bmbs\\.exe\\b" },
+      { "field": "Any", "regex": "\\brEgX\\.cmd\\b" },
+      { "field": "Any", "regex": "\\\\windows\\.dll\\b" },
+      { "field": "Any", "regex": "4qrttc9sl-sdnYziCVHb8g" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: script self-read payload extraction",
+    "description": "PowerShell reading a script file and pulling out lines with a marker prefix — DEAD#VAX uses Get-Content on its own rEgX.cmd copy to extract trailing '@ ' base64 lines into windows.dll",
+    "severity": "critical",
+    "eventIds": [1],
+    "all": [
+      { "field": "CommandLine", "regex": "Get-Content" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "\\.cmd\\b" },
+      { "field": "CommandLine", "regex": "\\.bat\\b" },
+      { "field": "CommandLine", "regex": "-match\\s*['\"]\\^?@" },
+      { "field": "CommandLine", "regex": "startswith\\(['\"]@" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: VM detection via WMI",
+    "description": "Script querying WMI and comparing the result against a virtualization vendor string — DEAD#VAX checks Win32_ComputerSystem and Win32_BIOS for 'VMware' and terminates if found",
+    "severity": "high",
+    "eventIds": [1],
+    "all": [
+      { "field": "CommandLine", "regex": "(Get-CimInstance|Get-WmiObject|gwmi|gcim|wmic)" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "VMware" },
+      { "field": "CommandLine", "regex": "VirtualBox" },
+      { "field": "CommandLine", "regex": "\\bvbox\\b" },
+      { "field": "CommandLine", "regex": "QEMU" },
+      { "field": "CommandLine", "regex": "\\bXen\\b" },
+      { "field": "CommandLine", "regex": "Parallels" },
+      { "field": "CommandLine", "regex": "Virtual (Machine|Platform)" },
+      { "field": "CommandLine", "regex": "innotek" }
+    ]
+  },
+  // Deliberately NOT matched here: a bare Win32_BIOS or
+  // Win32_ComputerSystem Manufacturer/Model query. Those are what asset
+  // inventory scripts run all day, and flagging them buried the noise floor.
+  // The high-fidelity signal is the comparison against a vendor string.
+
+  {
+    "name": "DEAD#VAX: sandbox memory check",
+    "description": "Script reading TotalPhysicalMemory to detect a low-resource sandbox — DEAD#VAX exits with code 123 if RAM is under 3 GB (3221225472 bytes); SMOKE#SCREEN's zoom-update.vbs used a 2 GB floor",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "TotalPhysicalMemory" },
+      { "field": "CommandLine", "regex": "3221225472" },
+      { "field": "CommandLine", "regex": "2147483648" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: analyst-environment check",
+    "description": "Script probing for analyst artifacts before proceeding — DEAD#VAX bails if the username is 'admin' or if %TEMP%\\VBE or mapping.csv exist, and runs 'net session' to test for elevation",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "net(\\.exe)?\\s+session" },
+      { "field": "CommandLine", "regex": "mapping\\.csv" },
+      { "field": "CommandLine", "regex": "%temp%\\\\VBE\\b" },
+      { "field": "CommandLine", "regex": "\\\\Temp\\\\VBE\\b" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: IPFS gateway delivery",
+    "description": "IPFS gateway reference — DEAD#VAX hosts its VHD on w3s.link, so the phishing email carries only a link with a valid cert from a reputable web3 provider and email gateways pass it through",
+    "severity": "critical",
+    "any": [
+      { "field": "QueryName", "regex": "(w3s\\.link|ipfs\\.io|dweb\\.link|cf-ipfs\\.com|nftstorage\\.link|ipfs\\.[a-z0-9-]+\\.[a-z]{2,})" },
+      { "field": "DestinationHostname", "regex": "(w3s\\.link|ipfs\\.io|dweb\\.link|cf-ipfs\\.com|nftstorage\\.link)" },
+      { "field": "CommandLine", "regex": "(w3s\\.link|ipfs\\.io|dweb\\.link|cf-ipfs\\.com|nftstorage\\.link)" },
+      { "field": "Any", "regex": "\\bbafybei[a-z2-7]{20,}" },
+      { "field": "Any", "regex": "\\bQm[1-9A-HJ-NP-Za-km-z]{44}\\b" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: double-extension masquerade",
+    "description": "File named to look like a document but carrying an executable extension — DEAD#VAX ships purchaseorder…pdf.wsf inside the VHD, which reads as a PDF to any user with extensions hidden",
+    "severity": "critical",
+    "any": [
+      { "field": "TargetFilename", "regex": "\\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|txt|rtf|zip|csv)\\.(wsf|vbs|vbe|js|jse|bat|cmd|exe|scr|lnk|hta|ps1|com|pif)\\b" },
+      { "field": "CommandLine", "regex": "\\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|txt|rtf|zip|csv)\\.(wsf|vbs|vbe|js|jse|bat|cmd|exe|scr|lnk|hta|ps1|com|pif)\\b" },
+      { "field": "Image", "regex": "\\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|txt|rtf|zip|csv)\\.(exe|scr|com|pif)\\b" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: WSF script execution",
+    "description": "Windows Script File executed — .wsf is rare in normal use and is DEAD#VAX's first executable stage, running from the mounted VHD volume where no Mark-of-the-Web applies",
+    "severity": "critical",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "\\.wsf\\b" },
+      { "field": "ParentCommandLine", "regex": "\\.wsf\\b" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: nested temp staging directory",
+    "description": "File written to a 'temp' subdirectory inside %TEMP% — DEAD#VAX creates a hidden %TEMP%\\temp and drops its randomly-named batch stage there",
+    "severity": "high",
+    "eventIds": [11],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\\\Temp\\\\temp\\\\" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: random-named script dropped",
+    "description": "Script file with a random alphanumeric name written to a temp path — DEAD#VAX's VBScript stage writes its decrypted batch as e.g. MXVT60Xx6um7nRNl.bat",
+    "severity": "high",
+    "eventIds": [11],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\\\[A-Za-z0-9]{12,}\\.(bat|cmd|vbs|wsf|ps1|js)$" }
+    ],
+    "any": [
+      { "field": "TargetFilename", "regex": "\\\\AppData\\\\Local\\\\Temp\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\ProgramData\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Users\\\\Public\\\\" }
+    ]
+  },
+
+  {
+    "name": "DEAD#VAX: MSXML base64 decoding",
+    "description": "MSXML DOMDocument used to base64-decode data — DEAD#VAX's VBScript avoids obvious decode functions by round-tripping through Msxml2.DOMDocument.3.0 bin.base64 nodes",
+    "severity": "high",
+    "any": [
+      { "field": "CommandLine", "regex": "Msxml2\\.DOMDocument" },
+      { "field": "CommandLine", "regex": "bin\\.base64" }
+    ]
+  },
+
+  // ==========================================================================
+  // FAUX#ELEVATE — French CV lure -> obfuscated VBS -> domain-join gate ->
+  // Dropbox 7z toolkit -> ChromElevator credential theft + XMRig mining
+  //
+  // Chain: phishing to HR with nouveau_curriculum_vitae.vbs (9.7 MB, 99.88%
+  // junk comments) -> anti-analysis (mutex file, timed loops) -> WMI
+  // PartOfDomain gate: non-domain hosts get only a UAC loop -> runas loop until
+  // elevated -> Defender exclusions c:..i:, EnableLUA=0 -> renamed 7-Zip (7g.exe)
+  // unpacks password-protected Dropbox archives to %Public%\WindowsUpdate ->
+  // mozilla.vbs/walls.vbs steal browser creds + Desktop files, exfil via
+  // smtp.mail.ru:465 -> RuntimeHost.exe injects explorer.exe, beacons :7077 ->
+  // mservice.exe (XMRig) mines with config pulled from a hacked WordPress site.
+  // ==========================================================================
+
+  {
+    "name": "FAUX#ELEVATE: domain-join enterprise gate",
+    "description": "Domain-membership check used to decide whether to keep going — FAUX#ELEVATE queries Win32_ComputerSystem.PartOfDomain and delivers its full payload chain only on domain-joined corporate machines, leaving standalone and sandbox hosts with nothing but a UAC prompt loop. Also covers the PowerShell/wmic/nltest equivalents other campaigns use for the same decision.",
+    "severity": "high",
+    "any": [
+      { "field": "CommandLine", "regex": "PartOfDomain" },
+      { "field": "ParentCommandLine", "regex": "PartOfDomain" },
+      { "field": "Operation", "regex": "PartOfDomain" },
+      { "field": "Operation", "regex": "Select .*From\\s+Win32_ComputerSystem" },
+      { "field": "CommandLine", "regex": "wmic[^\\n]*computersystem[^\\n]*get[^\\n]*domain" },
+      { "field": "CommandLine", "regex": "ActiveDirectory\\.Domain\\]::GetCurrentDomain" },
+      { "field": "CommandLine", "regex": "Get-ADDomain\\b" },
+      { "field": "CommandLine", "regex": "nltest[^\\n]*/(dsgetdc|dclist|domain_trusts)" },
+      { "field": "CommandLine", "regex": "net(\\.exe)?\\s+config\\s+workstation" },
+      { "field": "CommandLine", "regex": "\\$env:USERDNSDOMAIN" },
+      { "field": "CommandLine", "regex": "(Get-CimInstance|Get-WmiObject|gwmi|gcim)[^\\n]*Win32_ComputerSystem[^\\n]*Domain" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: UAC disabled via EnableLUA",
+    "description": "EnableLUA set to 0 — User Account Control switched off wholesale so every later process runs elevated with no prompt. FAUX#ELEVATE writes this once its runas loop wins admin rights.",
+    "severity": "critical",
+    "eventIds": [12, 13],
+    "any": [
+      { "field": "TargetObject", "regex": "\\\\Policies\\\\System\\\\EnableLUA" },
+      { "field": "TargetObject", "regex": "\\\\Policies\\\\System\\\\ConsentPromptBehaviorAdmin" },
+      { "field": "TargetObject", "regex": "\\\\Policies\\\\System\\\\PromptOnSecureDesktop" },
+      { "field": "TargetObject", "regex": "\\\\Policies\\\\System\\\\EnableInstallerDetection" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: UAC disabled from command line",
+    "description": "Command-line registry edit turning off UAC — the reg.exe / Set-ItemProperty form of the EnableLUA=0 change",
+    "severity": "critical",
+    "eventIds": [1],
+    "all": [
+      { "field": "CommandLine", "regex": "(EnableLUA|ConsentPromptBehaviorAdmin|PromptOnSecureDesktop)" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "reg(\\.exe)?\\s+add" },
+      { "field": "CommandLine", "regex": "(Set|New)-ItemProperty" },
+      { "field": "CommandLine", "regex": "/d\\s+0\\b" }
+    ]
+  },
+
+  // No separate multi-drive Defender rule here: FAUX#ELEVATE's
+  // "-ExclusionPath c:,d:,e:,f:,g:,h:,i:" already trips the SMOKE#SCREEN
+  // "Defender blinded to entire drive" rule above at Critical. A second rule
+  // matching the same strings could never win the tie — it would just be a
+  // dead rule the isolation probes would flag.
+
+  {
+    "name": "FAUX#ELEVATE: script host runas elevation loop",
+    "description": "Script host relaunching a script host — FAUX#ELEVATE loops ShellExecute \"wscript.exe\", <self>, \"\", \"runas\" forever, hammering the victim with UAC prompts until they finally approve one",
+    "severity": "high",
+    "eventIds": [1],
+    "parent": "(wscript|cscript)\\.exe",
+    "child": "(wscript|cscript)\\.exe"
+  },
+
+  {
+    "name": "FAUX#ELEVATE: password-protected archive extracted",
+    "description": "Archive tool unpacking a password-protected archive — FAUX#ELEVATE renames the official 7-Zip CLI to 7g.exe and extracts its Dropbox-hosted 7z payloads with the hardcoded password 1625093, which also defeats scanning of the archive in transit",
+    "severity": "critical",
+    "eventIds": [1],
+    "all": [
+      { "field": "CommandLine", "regex": "\\s-p[^\\s\"'-]" },
+      { "field": "CommandLine", "regex": "\\.(7z|zip|rar)\\b" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: config hidden in fake image on compromised site",
+    "description": "Script or shell fetching an image file from a WordPress uploads path — FAUX#ELEVATE pulls its XMRig command line from lmtop.ma/wp-content/uploads/2018/05/1300.png, which is Caesar-shifted Base64 text rather than an image",
+    "severity": "high",
+    "all": [
+      { "field": "CommandLine", "regex": "wp-content/uploads" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "\\.(png|jpe?g|gif|bmp|ico|svg|txt)\\b" },
+      { "field": "CommandLine", "regex": "(DownloadString|DownloadFile|Invoke-WebRequest|\\biwr\\b|\\bcurl\\b|\\bwget\\b|XMLHTTP|WinHttp)" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: XMRig cryptominer launch",
+    "description": "XMRig-style mining flags or a mining-pool connection — FAUX#ELEVATE runs mservice.exe with --pause-on-active=10 so mining stops the instant the victim touches the keyboard, plus --donate-level=0, --no-title and --tls to hide the traffic inside ordinary HTTPS",
+    "severity": "critical",
+    "any": [
+      { "field": "CommandLine", "regex": "--(pause-on-active|donate-level|no-title|randomx-mode|cpu-max-threads-hint|cinit-idle-wait)" },
+      { "field": "CommandLine", "regex": "stratum\\+(tcp|ssl)://" },
+      { "field": "CommandLine", "regex": "(supportxmr|minexmr|nanopool|moneroocean|xmrpool|f2pool|nicehash)" },
+      { "field": "QueryName", "regex": "(supportxmr|minexmr|nanopool|moneroocean|xmrpool)" },
+      { "field": "DestinationHostname", "regex": "(supportxmr|minexmr|nanopool|moneroocean|xmrpool)" },
+      { "field": "Any", "regex": "42VXdAiAeFvEsma3tjqbJ9P8o21fCE3f6fzDDVDRNmi4EK4iMKaFtoodb76rYobsn3WBAPZrXWCnsPf8JuNbNYHQ6C3Kypi" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: MSR kernel driver loaded",
+    "description": "WinRing0 driver present — a legitimate signed hardware-monitoring driver that cryptominers bundle to tune CPU model-specific registers for RandomX, and a well-known bring-your-own-vulnerable-driver primitive in its own right",
+    "severity": "critical",
+    "any": [
+      { "field": "ImageLoaded", "regex": "WinRing0" },
+      { "field": "TargetFilename", "regex": "WinRing0" },
+      { "field": "ImagePath", "regex": "WinRing0" },
+      { "field": "Image", "regex": "WinRing0" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: browser credential store accessed",
+    "description": "Firefox or Chromium credential database touched — mozilla.vbs copies key4.db, logins.json and cookies.sqlite out of every Firefox profile it finds; the Chromium equivalents are Login Data and Local State",
+    "severity": "critical",
+    "any": [
+      { "field": "TargetFilename", "regex": "(key[34]\\.db|logins\\.json|cookies\\.sqlite|places\\.sqlite|formhistory\\.sqlite|cert[89]\\.db|signons\\.sqlite)" },
+      { "field": "CommandLine", "regex": "(key[34]\\.db|logins\\.json|cookies\\.sqlite|formhistory\\.sqlite|signons\\.sqlite)" },
+      { "field": "TargetFilename", "regex": "\\\\(Login Data|Web Data|Local State)(\\.\\w+)?$" },
+      { "field": "CommandLine", "regex": "\\\\(Login Data|Web Data|Local State)\\b" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: browser killed to unlock credential store",
+    "description": "Browser processes force-terminated — credential databases are locked while the browser runs, so stealers kill it first; FAUX#ELEVATE dropped 15+ Chrome PIDs at once immediately before running ChromElevator",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "taskkill[^\\n]*/im\\s+\"?(chrome|msedge|firefox|brave|opera|vivaldi)\\.exe" },
+      { "field": "CommandLine", "regex": "Stop-Process[^\\n]*-Name\\s+['\"]?(chrome|msedge|firefox|brave|opera|vivaldi)\\b" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: SMTP exfiltration from script host",
+    "description": "Script host or shell connecting straight to an SMTP port — FAUX#ELEVATE ships stolen browser credentials and Desktop files to smtp.mail.ru:465 over SSL using CDO, with each subject tagged by victim country code. Normal workstations send mail through a client, not wscript.exe.",
+    "severity": "critical",
+    "eventIds": [3],
+    "all": [
+      { "field": "DestinationPort", "regex": "^(25|465|587|2525)$" },
+      { "field": "ImageName", "regex": "^(wscript|cscript|powershell|pwsh|mshta|rundll32|regsvr32|cmd)\\.exe$" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: injected explorer.exe beacon",
+    "description": "explorer.exe making an outbound connection to a non-standard port — FAUX#ELEVATE's RuntimeHost.exe injects into explorer.exe and beacons to 217.64.148.121:7077 (fallback 62046); Explorer has no business talking to arbitrary internet hosts",
+    "severity": "critical",
+    "eventIds": [3],
+    "all": [
+      { "field": "ImageName", "regex": "^explorer\\.exe$" }
+    ],
+    "any": [
+      { "field": "DestinationPort", "regex": "^(7077|62046)$" },
+      { "field": "DestinationIp", "regex": "^(46\\.105\\.76\\.166|217\\.64\\.148\\.121)$" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: C2 and exfiltration infrastructure",
+    "description": "Contact with known FAUX#ELEVATE infrastructure — OVH C2 46.105.76.166 / DDNS eufr18-166.workdns.com, the OVPN-fronted RAT channel 217.64.148.121, mail.ru SMTP exfil 94.100.180.160, or the compromised Moroccan WordPress payload hosts",
+    "severity": "critical",
+    "any": [
+      { "field": "DestinationIp", "regex": "^(46\\.105\\.76\\.166|217\\.64\\.148\\.121|141\\.94\\.96\\.71|141\\.94\\.96\\.144|94\\.100\\.180\\.160|172\\.67\\.69\\.226)$" },
+      { "field": "QueryName", "regex": "(workdns\\.com|lmtop\\.ma|fortrust-cf\\.ma|expressnegoce\\.ma)" },
+      { "field": "DestinationHostname", "regex": "(workdns\\.com|lmtop\\.ma|fortrust-cf\\.ma|expressnegoce\\.ma)" },
+      { "field": "CommandLine", "regex": "(46\\.105\\.76\\.166|217\\.64\\.148\\.121|94\\.100\\.180\\.160|workdns\\.com|lmtop\\.ma|fortrust-cf\\.ma|expressnegoce\\.ma)" },
+      { "field": "Any", "regex": "(olga\\.aitsaid@mail|3pw5nd9neeyn@mail|vladimirprolitovitch@duck)" }
+    ]
+  },
+
+  {
+    "name": "FAUX#ELEVATE: campaign artifact filename",
+    "description": "Known FAUX#ELEVATE artifact — the French CV lure, the renamed 7-Zip binary (7g.exe), the Dropbox archives, the %Public%\\WindowsUpdate toolkit (RuntimeHost.exe, mservice.*, mozilla.vbs, walls.vbs, x.exe/ps.exe/pss.exe), or the staged exfil archives",
+    "severity": "critical",
+    "any": [
+      { "field": "Any", "regex": "nouveau_curriculum_vitae" },
+      { "field": "Any", "regex": "\\\\Users\\\\Public\\\\WindowsUpdate\\b" },
+      { "field": "Any", "regex": "\\b7g\\.exe\\b" },
+      { "field": "Any", "regex": "\\bgmail(2|_ma)?\\.7z\\b" },
+      { "field": "Any", "regex": "\\bRuntimeHost\\.exe\\b" },
+      { "field": "Any", "regex": "\\bmservice\\.(exe|vbs)\\b" },
+      { "field": "Any", "regex": "\\b(mozilla|walls)\\.vbs\\b" },
+      { "field": "Any", "regex": "(profiles_[A-Za-z0-9_.-]*\\.zip|FILES_[A-Za-z0-9_.-]*\\.zip)" },
+      { "field": "Any", "regex": "1625093" },
+      { "field": "Any", "regex": "(Microsoft Media Service|MicrosoftUpdateService|z_MicrosoftEdgeAutoLaunch)" }
+    ]
+  },
+
+  {
+    "name": "Victim geolocation lookup",
+    "description": "Query to a public IP-geolocation service — FAUX#ELEVATE calls ipapi.co/country to tag each exfil email with the victim's country and ip-api.com to fingerprint the host for the operator's inventory",
+    "severity": "medium",
+    "any": [
+      { "field": "QueryName", "regex": "^(ip-api\\.com|ipapi\\.co|ipinfo\\.io|api\\.ipify\\.org|checkip\\.amazonaws\\.com|icanhazip\\.com|ifconfig\\.me|wtfismyip\\.com|freegeoip\\.app|geoplugin\\.net)$" },
+      { "field": "CommandLine", "regex": "(ip-api\\.com|ipapi\\.co|ipinfo\\.io|api\\.ipify\\.org|icanhazip\\.com|ifconfig\\.me|wtfismyip\\.com)" }
+    ]
+  },
+
+  {
+    "name": "Firewall rule added from command line",
+    "description": "netsh used to add a firewall exception or turn the firewall off — FAUX#ELEVATE's RuntimeHost.exe opens inbound/outbound holes for its own C2 traffic before beaconing",
+    "severity": "high",
+    "eventIds": [1],
+    "all": [
+      { "field": "CommandLine", "regex": "netsh[^\\n]*(firewall|advfirewall)" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "add\\s+(rule|allowedprogram|portopening)" },
+      { "field": "CommandLine", "regex": "set\\s+(allprofiles|currentprofile|opmode)[^\\n]*(state\\s+off|disable)" }
+    ]
+  },
+
+  {
+    "name": "Script deleted itself after execution",
+    "description": "Script file deleted from a user-writable path — FAUX#ELEVATE's dropper calls FileSystemObject.DeleteFile on its own path, and the stealers wipe mozilla.vbs, walls.vbs and the credential tools once exfiltration finishes, leaving responders only the miner to find",
+    "severity": "high",
+    "eventIds": [23, 26],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\.(vbs|vbe|js|jse|wsf|bat|cmd|ps1)$" }
+    ]
+  },
+
+  // ==========================================================================
+  // Container-file delivery (VHD / VHDX / ISO / IMG)
+  //
+  // Generic container tradecraft, backing the DEAD#VAX rules above. Mounting a
+  // container IS the Mark-of-the-Web bypass: the .vhd itself gets a
+  // Zone.Identifier on download, but Windows mounts it as a separate volume and
+  // the files inside inherit nothing — to the OS they are ordinary local files
+  // on a local disk, so SmartScreen never prompts.
+  // ==========================================================================
+
+  {
+    "name": "Disk image mounted",
+    "description": "VHD/VHDX/ISO mounted — container delivery bypasses Mark-of-the-Web entirely, so nothing inside the image carries a Zone.Identifier or triggers SmartScreen",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "Mount-(DiskImage|VHD)" },
+      { "field": "CommandLine", "regex": "diskpart[^\\n]*(attach|select)\\s+vdisk" },
+      { "field": "CommandLine", "regex": "PowerShell[^\\n]*\\.(vhdx?|iso|img)\\b" }
+    ]
+  },
+
+  {
+    "name": "Container image written to disk",
+    "description": "VHD/VHDX/ISO/IMG written to a user-writable path — the delivery step before the victim double-clicks to mount",
+    "severity": "medium",
+    "eventIds": [11],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\.(vhd|vhdx|iso|img)$" }
+    ]
+  },
+
+  {
+    "name": "Script executed from mounted volume",
+    "description": "Batch/script/shortcut launched from a non-system drive letter — the payload running from inside a mounted container, with no Mark-of-the-Web to stop it",
+    "severity": "critical",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "\\b[D-Z]:\\\\[^\\\"\\s]*\\.(bat|cmd|vbs|vbe|js|jse|wsf|ps1|lnk|hta|scr)\\b" },
+      { "field": "ParentCommandLine", "regex": "\\b[D-Z]:\\\\[^\\\"\\s]*\\.(bat|cmd|vbs|vbe|js|jse|wsf|ps1|lnk|hta|scr)\\b" }
+    ]
+  },
+
+  {
+    "name": "Executable running from mounted volume",
+    "description": "Process image located on a non-system drive letter — execution from inside a mounted container or removable media",
+    "severity": "high",
+    "eventIds": [1],
+    "all": [
+      { "field": "Image", "regex": "^[D-Z]:\\\\" },
+      { "field": "Image", "regex": "^[A-Z]:\\\\Windows\\\\", "not": true }
+    ]
+  },
+
+  {
+    "name": "Shortcut file dropped",
+    "description": "LNK written to a user-writable path — container payloads commonly ship a .lnk that masquerades as a document and points at a script",
+    "severity": "medium",
+    "eventIds": [11],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\.lnk$" }
+    ],
+    "any": [
+      { "field": "TargetFilename", "regex": "\\\\AppData\\\\Local\\\\Temp\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Users\\\\Public\\\\" },
+      { "field": "TargetFilename", "regex": "\\\\Downloads\\\\" },
+      { "field": "TargetFilename", "regex": "^[D-Z]:\\\\" }
+    ]
+  },
+
+  // ==========================================================================
+  // Persistence (batch-script campaigns lean on these heavily)
+  // ==========================================================================
+
+  {
+    "name": "Run key persistence",
+    "description": "Registry Run/RunOnce key written — the most common persistence mechanism for script-based loaders",
+    "severity": "high",
+    "eventIds": [12, 13],
+    "any": [
+      { "field": "TargetObject", "regex": "\\\\CurrentVersion\\\\Run(Once)?\\\\" },
+      { "field": "TargetObject", "regex": "\\\\CurrentVersion\\\\RunServices(Once)?\\\\" },
+      { "field": "TargetObject", "regex": "\\\\Winlogon\\\\(Shell|Userinit)" }
+    ]
+  },
+
+  {
+    "name": "Scheduled task created",
+    "description": "Scheduled task registered from a command line — persistence, or a delayed execution stage to break EDR correlation windows",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "schtasks[^\\n]*/create" },
+      { "field": "CommandLine", "regex": "Register-ScheduledTask" },
+      { "field": "CommandLine", "regex": "New-ScheduledTask" }
+    ]
+  },
+
+  {
+    "name": "Startup folder persistence",
+    "description": "File written to a Startup folder — runs automatically at next logon",
+    "severity": "high",
+    "eventIds": [11],
+    "all": [
+      { "field": "TargetFilename", "regex": "\\\\Start Menu\\\\Programs\\\\Startup\\\\" }
+    ]
+  },
+
+  {
+    "name": "Service installed from user-writable path",
+    "description": "Service created pointing at a binary in TEMP/AppData/Public — persistence with SYSTEM-level execution",
+    "severity": "critical",
+    "eventIds": [1],
+    "all": [
+      { "field": "CommandLine", "regex": "(sc(\\.exe)?\\s+create|New-Service)" }
+    ],
+    "any": [
+      { "field": "CommandLine", "regex": "\\\\AppData\\\\" },
+      { "field": "CommandLine", "regex": "\\\\Temp\\\\" },
+      { "field": "CommandLine", "regex": "\\\\Users\\\\Public\\\\" }
+    ]
+  },
+
+  {
+    "name": "Anti-correlation sleep",
+    "description": "Long deliberate delay before the next stage — SMOKE#SCREEN's loader.cs carries the comment \"WAIT 3 MINUTES (Breaks Elastic correlation)\" and sleeps 180 seconds to fall outside EDR correlation windows",
+    "severity": "high",
+    "eventIds": [1],
+    "any": [
+      { "field": "CommandLine", "regex": "(timeout|sleep)[^\\n]*\\b([1-9]\\d{2,})\\b" },
+      { "field": "CommandLine", "regex": "Start-Sleep[^\\n]*\\b([1-9]\\d{2,})\\b" },
+      { "field": "CommandLine", "regex": "ping[^\\n]*-n\\s+([1-9]\\d{2,})" }
+    ]
+  },
+
+  // ==========================================================================
+  // Generic PowerShell / execution tradecraft
+  // ==========================================================================
+
+  {
+    "name": "Encoded PowerShell command",
+    "description": "PowerShell executed a base64-encoded command block",
+    "severity": "high",
+    "eventIds": [1],
+    "child": "(powershell|pwsh)\\.exe",
+    "any": [
+      { "field": "CommandLine", "regex": "\\s-[eE][ncodemas]*\\s+[A-Za-z0-9+/=]{40,}" },
+      { "field": "CommandLine", "regex": "FromBase64String" }
+    ]
+  },
+
+  {
+    "name": "Hidden-window PowerShell",
+    "description": "PowerShell launched with a hidden window and/or execution-policy bypass",
+    "severity": "medium",
+    "eventIds": [1],
+    "child": "(powershell|pwsh)\\.exe",
+    "any": [
+      { "field": "CommandLine", "regex": "-(w|windowstyle)\\s+h" },
+      { "field": "CommandLine", "regex": "-(ep|exec|executionpolicy)\\s+bypass" },
+      { "field": "CommandLine", "regex": "-nop\\b" }
+    ]
+  },
+
+  // ==========================================================================
+  // Generic abnormal parentage (keep — catches non-campaign activity too)
+  // ==========================================================================
+
+  {
+    "name": "Office spawned LOLBin",
+    "parent": "(winword|excel|powerpnt|outlook|msaccess|mspub|visio|onenote)\\.exe",
+    "child": "(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|bitsadmin|certutil|msbuild|installutil|msiexec)\\.exe",
+    "description": "Office application spawned a shell/LOLBin (common macro/phishing execution)",
+    "severity": "critical"
+  },
+  {
+    "name": "Browser spawned shell",
+    "parent": "(chrome|msedge|firefox|iexplore|brave|opera)\\.exe",
+    "child": "(cmd|powershell|pwsh|wscript|cscript|mshta)\\.exe",
+    "description": "Browser spawned a shell/script host — matches the zoom-update.html and Adobe Flash fake-update lures",
+    "severity": "high"
+  },
+  {
+    "name": "Script host spawned LOLBin",
+    "parent": "(mshta|wscript|cscript)\\.exe",
+    "child": "(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|bitsadmin|certutil|msbuild|installutil|msiexec)\\.exe",
+    "description": "Script host spawned a shell/LOLBin (script-based dropper chain)",
+    "severity": "high"
+  },
+  {
+    "name": "Server spawned shell",
+    "parent": "(sqlservr|w3wp|httpd|nginx|tomcat\\w*|php-cgi)\\.exe",
+    "child": "(cmd|powershell|pwsh|wscript|cscript|sh|bash)\\.exe",
+    "description": "Server process spawned a shell (possible webshell)",
+    "severity": "critical"
+  },
+  {
+    "name": "LSASS spawned child",
+    "parent": "lsass\\.exe",
+    "child": ".*",
+    "description": "LSASS spawned a child process (LSASS should not create children)",
+    "severity": "critical"
+  },
+  {
+    "name": "Scheduled task spawned shell",
+    "parent": "(schtasks|taskeng)\\.exe",
+    "child": "(cmd|powershell|pwsh|wscript|cscript|mshta)\\.exe",
+    "description": "Scheduled task spawned a shell (persistence execution)",
+    "severity": "medium"
+  }
+]

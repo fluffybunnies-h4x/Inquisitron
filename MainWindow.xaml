@@ -1,0 +1,391 @@
+﻿<Window x:Class="Inquisitron.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Inquisitron"
+        Width="1400" Height="850"
+        WindowStartupLocation="CenterScreen"
+        Background="#FF1E1E1E">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="PanelBrush" Color="#FF252526"/>
+        <SolidColorBrush x:Key="EdgeBrush" Color="#FF3F3F46"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#FFDCDCDC"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF0E639C"/>
+
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="#FF333337"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EdgeBrush}"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="CaretBrush" Value="White"/>
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="#FF333337"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EdgeBrush}"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Margin" Value="4,0,0,0"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="10,0,0,0"/>
+        </Style>
+
+        <Style x:Key="ColumnHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#FF2D2D30"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EdgeBrush}"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        </Style>
+
+        <!-- Per-column filter box embedded in the header.
+             Syntax: comma-separated terms, prefix ! to exclude (e.g. "chrome,!msedge"). -->
+        <Style x:Key="HeaderFilterBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#FF1E1E1E"/>
+            <Setter Property="Foreground" Value="#FF9CDCFE"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EdgeBrush}"/>
+            <Setter Property="Padding" Value="3,1"/>
+            <Setter Property="Margin" Value="0,3,0,0"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="CaretBrush" Value="White"/>
+            <Setter Property="ToolTip" Value="Filter: comma-separated terms, ! prefix excludes (e.g. chrome,!msedge)"/>
+        </Style>
+
+        <Style x:Key="EventGridStyle" TargetType="DataGrid">
+            <Setter Property="Background" Value="#FF1E1E1E"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EdgeBrush}"/>
+            <Setter Property="RowBackground" Value="#FF1E1E1E"/>
+            <Setter Property="AlternatingRowBackground" Value="#FF232324"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#FF2A2A2B"/>
+            <Setter Property="VerticalGridLinesBrush" Value="#FF2A2A2B"/>
+            <Setter Property="ColumnHeaderStyle" Value="{StaticResource ColumnHeaderStyle}"/>
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="SelectionMode" Value="Single"/>
+            <Setter Property="SelectionUnit" Value="FullRow"/>
+            <Setter Property="EnableRowVirtualization" Value="True"/>
+            <Setter Property="EnableColumnVirtualization" Value="True"/>
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="220"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource EdgeBrush}" BorderThickness="0,0,0,1" Padding="8,6">
+            <!-- Two rows so the default window width doesn't clip the right end -->
+            <StackPanel>
+                <DockPanel LastChildFill="False">
+                    <TextBlock Text="Channel:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="ChannelBox" Width="310" IsEditable="True"
+                              Text="Microsoft-Windows-Sysmon/Operational">
+                        <ComboBoxItem>Microsoft-Windows-Sysmon/Operational</ComboBoxItem>
+                        <ComboBoxItem>Microsoft-Windows-PowerShell/Operational</ComboBoxItem>
+                        <ComboBoxItem>Microsoft-Windows-Windows Defender/Operational</ComboBoxItem>
+                        <ComboBoxItem>Microsoft-Windows-TaskScheduler/Operational</ComboBoxItem>
+                        <!-- WMI query text (e.g. a script's PartOfDomain check) appears
+                             only here — Sysmon 19/20/21 log subscriptions, not queries. -->
+                        <ComboBoxItem>Microsoft-Windows-WMI-Activity/Operational</ComboBoxItem>
+                        <ComboBoxItem>Security</ComboBoxItem>
+                        <ComboBoxItem>System</ComboBoxItem>
+                    </ComboBox>
+
+                    <Button x:Name="StartStopButton" Content="▶ Start" Click="StartStopButton_Click" MinWidth="80"/>
+                    <Button Content="Clear" Click="ClearButton_Click"/>
+                    <Button Content="Open .evtx…" Click="OpenEvtx_Click"
+                            ToolTip="Load a saved event log file for offline triage (replaces the current view)"/>
+                    <Button Content="Export…" Click="Export_Click"
+                            ToolTip="Export the currently visible (filtered) events to CSV or JSON"/>
+
+                    <TextBlock Text="Type:" VerticalAlignment="Center" Margin="16,0,6,0"/>
+                    <ComboBox x:Name="EventIdFilterBox" Width="220" SelectionChanged="Filter_Changed"/>
+                </DockPanel>
+
+                <DockPanel LastChildFill="False" Margin="0,6,0,0">
+                    <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="SearchBox" Width="250" TextChanged="Filter_Changed"
+                             ToolTip="Case-insensitive match against any event field"/>
+
+                    <Button Content="Clear filters" Click="ClearFilters_Click"/>
+                    <Button Content="⟳ Rules" Click="ReloadRules_Click"
+                            ToolTip="Reload suspicion-rules.json and re-evaluate every loaded Process Create event"/>
+                    <CheckBox x:Name="FlaggedOnlyCheck" Content="⚠ Flagged only" Checked="Filter_Changed" Unchecked="Filter_Changed"/>
+                    <CheckBox x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True"/>
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Event list / process tree -->
+        <TabControl Grid.Row="1" x:Name="MainTabs" Background="#FF1E1E1E"
+                    BorderBrush="{StaticResource EdgeBrush}" BorderThickness="0,1,0,0" Padding="0">
+        <TabItem Header="Events">
+        <DataGrid x:Name="EventGrid" Style="{StaticResource EventGridStyle}"
+                  CanUserSortColumns="False" AlternationCount="2"
+                  SelectionChanged="EventGrid_SelectionChanged"
+                  ContextMenuOpening="EventGrid_ContextMenuOpening">
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="Background" Value="#FF1E1E1E"/>
+                    <Style.Triggers>
+                        <Trigger Property="ItemsControl.AlternationIndex" Value="1">
+                            <Setter Property="Background" Value="#FF232324"/>
+                        </Trigger>
+                        <DataTrigger Binding="{Binding SuspicionSeverity}" Value="Low">
+                            <Setter Property="Background" Value="#FF23303A"/>
+                            <Setter Property="ToolTip" Value="{Binding SuspicionReason}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding SuspicionSeverity}" Value="Medium">
+                            <Setter Property="Background" Value="#FF3D3320"/>
+                            <Setter Property="ToolTip" Value="{Binding SuspicionReason}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding SuspicionSeverity}" Value="High">
+                            <Setter Property="Background" Value="#FF4A2A14"/>
+                            <Setter Property="ToolTip" Value="{Binding SuspicionReason}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding SuspicionSeverity}" Value="Critical">
+                            <Setter Property="Background" Value="#FF5E1616"/>
+                            <Setter Property="ToolTip" Value="{Binding SuspicionReason}"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <!-- Header is rewritten on open to show the clicked cell's value -->
+                    <MenuItem x:Name="CopyCellItem" Header="Copy cell" Click="CopyCell_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Show process lineage" Click="ShowLineage_Click"/>
+                    <MenuItem Header="Filter to this PID" Click="FilterToPid_Click"/>
+                    <MenuItem x:Name="FilterPpidItem" Header="Filter to this PPID" Click="FilterToPpid_Click"
+                              ToolTip="Show every process spawned by this event's parent (Event ID 1 rows only)"/>
+                    <Separator/>
+                    <MenuItem Header="Filter to this Process" Click="FilterToProcess_Click"/>
+                    <MenuItem Header="Exclude this Process" Click="ExcludeProcess_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Filter to this Event ID" Click="FilterToEventId_Click"/>
+                    <MenuItem Header="Exclude this Event ID" Click="ExcludeEventId_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Clear all filters" Click="ClearFilters_Click"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
+            <DataGrid.Columns>
+                <DataGridTextColumn Binding="{Binding Flag}" Width="28" IsReadOnly="True">
+                    <DataGridTextColumn.Header>
+                        <TextBlock Text="" ToolTip="⛔ Critical  ⚠ High  ▲ Medium  • Low"/>
+                    </DataGridTextColumn.Header>
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FFFF8C42"/>
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding SuspicionRuleName}" Width="190">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="Detection" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="Rule"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"
+                                     ToolTip="Filter by rule name, e.g. SMOKE or Defender"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FFFFB86C"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding TimeCreated, StringFormat='yyyy-MM-dd HH:mm:ss.fff'}" Width="165">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="Time" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="Time"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding EventId}" Width="60">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="ID" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="ID"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"
+                                     ToolTip="Exact IDs, comma-separated, ! excludes (e.g. 1,3 or !22)"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding Pid}" Width="70">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="PID" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="PID"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"
+                                     ToolTip="Exact PIDs, comma-separated, ! excludes"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding ParentPid}" Width="70">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="PPID" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="PPID"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"
+                                     ToolTip="Exact parent PIDs (Event ID 1 only), comma-separated, ! excludes"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding TaskName}" Width="185">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="Event Type" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="Type"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding ProcessName}" Width="150">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="Process" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="Process"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"
+                                     ToolTip="Matches full image path, comma-separated, ! excludes"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding Summary}" Width="*">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="Summary" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="Summary"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+        </TabItem>
+
+        <TabItem Header="Process Tree">
+            <DockPanel Background="#FF1E1E1E">
+                <Border DockPanel.Dock="Top" Background="{StaticResource PanelBrush}"
+                        BorderBrush="{StaticResource EdgeBrush}" BorderThickness="0,0,0,1" Padding="8,4">
+                    <DockPanel LastChildFill="False">
+                        <Button Content="Expand all" Click="ExpandTree_Click" Margin="0"/>
+                        <Button Content="Collapse all" Click="CollapseTree_Click"/>
+                        <TextBlock Text="Built from Event ID 1 (ProcessGuid lineage). ⚠ = suspicious spawn, gray = exited."
+                                   VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#FF9A9A9A"/>
+                    </DockPanel>
+                </Border>
+                <TreeView x:Name="ProcessTreeView" Background="#FF1E1E1E" BorderThickness="0"
+                          FontFamily="Consolas" FontSize="12"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <TreeView.ItemContainerStyle>
+                        <Style TargetType="TreeViewItem">
+                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Style>
+                    </TreeView.ItemContainerStyle>
+                    <TreeView.ItemTemplate>
+                        <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                            <StackPanel Orientation="Horizontal" ToolTipService.ShowDuration="30000">
+                                <StackPanel.ToolTip>
+                                    <StackPanel MaxWidth="700">
+                                        <TextBlock Text="{Binding Image}" FontWeight="Bold" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding CommandLine}" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding SuspicionReason}" Foreground="OrangeRed" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </StackPanel.ToolTip>
+                                <TextBlock Text="{Binding Flag}" Foreground="#FFFF8C42" FontWeight="Bold"/>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Exited}" Value="True">
+                                                    <Setter Property="Foreground" Value="#FF707070"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsSuspicious}" Value="True">
+                                                    <Setter Property="Foreground" Value="#FFFF8C42"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{Binding PidText}" Foreground="#FF9A9A9A" Margin="8,0,0,0"/>
+                                <TextBlock Text="{Binding CommandLine}" Foreground="#FF6E9955" Margin="8,0,0,0"
+                                           MaxWidth="900" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </HierarchicalDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
+            </DockPanel>
+        </TabItem>
+
+        </TabControl>
+
+        <GridSplitter Grid.Row="2" Height="5" HorizontalAlignment="Stretch"
+                      Background="{StaticResource EdgeBrush}" ResizeBehavior="PreviousAndNext"/>
+
+        <!-- Detail pane -->
+        <TabControl Grid.Row="3" Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource EdgeBrush}">
+            <TabItem Header="Fields">
+                <DataGrid x:Name="DetailGrid" Style="{StaticResource EventGridStyle}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Field" Binding="{Binding Key}" Width="220"/>
+                        <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextWrapping" Value="Wrap"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+            <TabItem Header="Raw XML">
+                <TextBox x:Name="XmlBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12"
+                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                         Background="#FF1E1E1E" BorderThickness="0"/>
+            </TabItem>
+        </TabControl>
+
+        <!-- Status bar -->
+        <Border Grid.Row="4" Background="{StaticResource AccentBrush}" Padding="8,3">
+            <DockPanel>
+                <TextBlock x:Name="CountText" Foreground="White" DockPanel.Dock="Right"/>
+                <TextBlock x:Name="StatusText" Text="Stopped" Foreground="White"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+
+# Publish output — but keep the master rule set, which lives here and is
+# the file users are meant to edit and ship beside the exe.
+publish/*
+!publish/suspicion-rules.json
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+launchSettings.json
+
+# Build artifacts that should never be committed
+*.exe
+*.dll
+*.pdb
+*.zip
+*.7z
+
+# Captured telemetry — never commit event logs or exports, they contain
+# host names, user names, and full command lines from real machines.
+*.evtx
+inquisitron-*.csv
+inquisitron-*.json
