@@ -1,6 +1,19 @@
-# Inquisitron
+<p align="center">
+  <img src="Inquisitron.png" alt="Inquisitron" width="820">
+</p>
 
-A real-time Sysmon log viewer and behavioral detection engine for Windows threat hunting.
+<h1 align="center">Inquisitron</h1>
+
+<p align="center">
+  A real-time Sysmon log viewer and behavioral detection engine for Windows threat hunting.
+</p>
+
+<p align="center">
+  <img alt="platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0e639c">
+  <img alt="built with .NET 10 and WPF" src="https://img.shields.io/badge/.NET-10%20%2F%20WPF-512bd4">
+  <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-green">
+  <img alt="no network egress" src="https://img.shields.io/badge/network%20egress-none-critical">
+</p>
 
 ## Why "Inquisitron"
 
