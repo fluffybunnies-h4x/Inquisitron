@@ -138,7 +138,15 @@ No restart, no re-run.
 
 The rules need Sysmon logging these event IDs: **1** (process create), **3** (network),
 **11** (file create), **12/13** (registry), **22** (DNS), **23/26** (file delete).
-SwiftOnSecurity's `sysmon-config` covers 1/3/11/12/13/22 but **filters DNS and network
-heavily** — for the demo, loosen the network and DNS sections or the C2 rules will stay
-quiet. Event 23/26 (file delete) is off by default in most configs; enable it or the
-installer self-delete rule never fires.
+
+Use [FT-Sysmon-Config](https://github.com/fluffybunnies-h4x/FT-Sysmon-Config) —
+Event 26 is already enabled there, so the installer self-delete rule fires
+without extra edits:
+
+```
+sysmon.exe -accepteula -i ft-sysmonconfig-export.xml
+```
+
+Stock SwiftOnSecurity `sysmon-config` covers 1/3/11/12/13/22 but **filters DNS and
+network heavily** — loosen those sections or the C2 rules stay quiet — and leaves
+Event 23/26 off, so the self-delete rule never fires at all.

@@ -186,15 +186,42 @@ clean. Exit code 0 means all green. Run it after every rule or engine change.
 - .NET 10 SDK to build
 - **Administrator rights** to read the Sysmon channel — its ACL grants read to
   Administrators only. The app manifest requests elevation automatically.
-- Sysmon installed:
+- Sysmon installed and configured (see below)
 
-  ```
-  sysmon64 -accepteula -i sysmonconfig.xml
-  ```
+## Sysmon configuration
 
-  [SwiftOnSecurity's sysmon-config](https://github.com/SwiftOnSecurity/sysmon-config)
-  is a good starting point. Rules keyed on `OriginalFileName` need
-  `ProcessCreate` fields enabled, which that config provides.
+**Inquisitron is only as good as the telemetry underneath it.** Its rules span
+event IDs 1 (process create), 3 (network), 6 (driver load), 7 (image load),
+11 (file create), 12/13 (registry), 22 (DNS), and 23/26 (file delete) — a
+config that only logs process creation leaves most of the rule set dormant and
+the process tree half-built.
+
+The recommended config is
+**[FT-Sysmon-Config](https://github.com/fluffybunnies-h4x/FT-Sysmon-Config)**:
+
+```
+sysmon.exe -accepteula -i ft-sysmonconfig-export.xml
+```
+
+It's a [SwiftOnSecurity sysmon-config](https://github.com/SwiftOnSecurity/sysmon-config)
+fork maintained against live malware TTPs in a threat-research range, and it
+turns on several things Inquisitron's rules specifically need:
+
+| FT-Sysmon-Config change | Rules that depend on it |
+| --- | --- |
+| **Event ID 26 enabled** (file delete detected) | Installer and script self-deletion — the post-exploitation cleanup step in several campaigns. Not enabled in the stock upstream config. |
+| **Image loads from AppData / Downloads / non-`C:` drives** | Kernel-driver and sideloaded-DLL rules, including the WinRing0 MSR driver cryptominers bundle |
+| **Registry coverage for `reg.exe`, PowerShell, `C:\Users\Public`, AppData** | SmartScreen teardown, `EnableLUA=0`, Run-key persistence |
+| **File creates in `ProgramData`, `Windows\Temp`, `.lnk` and `.url`** | Staging-directory drops, random-named script drops, shortcut delivery |
+| **Named-pipe coverage, conhost exclusion removed** | Reduces blind spots around injected and hollowed processes |
+
+Stock SwiftOnSecurity works fine as a baseline — rules keyed on
+`OriginalFileName` need the `ProcessCreate` fields it already provides — but
+expect the delete- and image-load-based rules to stay quiet until you enable
+those events.
+
+Whatever config you run, verify it against the noise floor: start a capture on
+an idle machine with **⚠ Flagged only** ticked and confirm nothing lights up.
 
 ## Project layout
 

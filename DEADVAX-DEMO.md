@@ -104,7 +104,18 @@ Windows binary. None of it is caught by hashes — every rule here is behavioral
 ## Sysmon config
 
 These rules need event IDs **1** (process create, with `OriginalFileName`), **3**
-(network), **11** (file create), **12/13** (registry), **22** (DNS), **23/26**
-(file delete). SwiftOnSecurity's `sysmon-config` filters DNS and network heavily
-and excludes many file-create paths — loosen those sections or the IPFS, mount,
-and drop rules will stay quiet. File-delete events are off in most configs.
+(network), **7** (image load), **11** (file create), **12/13** (registry), **22**
+(DNS), **23/26** (file delete).
+
+Use [FT-Sysmon-Config](https://github.com/fluffybunnies-h4x/FT-Sysmon-Config) —
+it already enables Event 26 and widens image-load and file-create coverage to
+AppData, Downloads, `ProgramData` and non-`C:` drives, which is exactly what the
+mount, drop, and self-delete rules in this chain need:
+
+```
+sysmon.exe -accepteula -i ft-sysmonconfig-export.xml
+```
+
+On stock SwiftOnSecurity `sysmon-config`, DNS and network are filtered heavily
+and many file-create paths are excluded — loosen those sections or the IPFS,
+mount, and drop rules stay quiet. File-delete events are off entirely.
