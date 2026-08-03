@@ -13,7 +13,7 @@ ability to run commands partway through, so **the build and the detection tests
 have not been run since the final edits**. Do this first:
 
 ```bash
-dotnet publish "C:\Users\user\Documents\Null-Sec\Inquisitron\Inquisitron.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o "C:\Users\user\Documents\Null-Sec\Inquisitron\publish"
+dotnet publish Inquisitron.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o publish
 ```
 
 Then launch Inquisitron and confirm the status bar after clicking **⟳ Rules** reads

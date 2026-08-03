@@ -27,3 +27,6 @@ launchSettings.json
 *.evtx
 inquisitron-*.csv
 inquisitron-*.json
+
+# Local AI-assistant working notes — internal, kept out of the public repo.
+CLAUDE.md
