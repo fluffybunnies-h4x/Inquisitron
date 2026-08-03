@@ -65,6 +65,39 @@
             <Setter Property="ToolTip" Value="Filter: comma-separated terms, ! prefix excludes (e.g. chrome,!msedge)"/>
         </Style>
 
+        <!-- Dark tab headers to match the rest of the theme; the default WPF
+             TabItem is light Aero chrome. -->
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Bd" Background="#FF2D2D30"
+                                BorderBrush="{StaticResource EdgeBrush}" BorderThickness="1,1,1,0"
+                                Margin="0,0,2,0" Padding="12,5">
+                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF1E1E1E"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="1,2,1,0"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsSelected" Value="False"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#FF3E3E42"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="EventGridStyle" TargetType="DataGrid">
             <Setter Property="Background" Value="#FF1E1E1E"/>
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>

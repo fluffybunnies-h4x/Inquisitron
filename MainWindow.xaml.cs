@@ -2,11 +2,13 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using Inquisitron.Models;
@@ -60,6 +62,29 @@ public partial class MainWindow : Window
         };
 
         Closed += (_, _) => _service.Dispose();
+    }
+
+    // ---- Dark title bar ----
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            var on = 1;
+            // DWMWA_USE_IMMERSIVE_DARK_MODE is 20 on Windows 10 20H1+/11 and was
+            // 19 on 1809-1909; try the current value, fall back to the old one.
+            if (DwmSetWindowAttribute(hwnd, 20, ref on, sizeof(int)) != 0)
+                DwmSetWindowAttribute(hwnd, 19, ref on, sizeof(int));
+        }
+        catch
+        {
+            // dwmapi missing or pre-1809 — keep the default light title bar.
+        }
     }
 
     private void PopulateEventIdFilter()

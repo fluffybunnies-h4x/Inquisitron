@@ -14,7 +14,7 @@
          appended automatically to ProductVersion (e.g. 1.0.0+build.20260801-2145)
          so two builds of the same Version are still distinguishable — check with:
          (Get-Item Inquisitron.exe).VersionInfo.ProductVersion -->
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <SourceRevisionId>build.$([System.DateTime]::UtcNow.ToString("yyyyMMdd-HHmm"))</SourceRevisionId>
     <!-- Without this, single-file publish leaves WPF's native DLLs
          (PresentationNative_cor3 etc.) beside the exe and the "standalone" exe
