@@ -13,13 +13,16 @@ namespace Inquisitron.Services;
 /// </summary>
 public sealed class EventLogService : IDisposable
 {
-    private EventLogWatcher? _watcher;
+    private readonly Dictionary<string, EventLogWatcher> _watchers =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<SysmonEvent>? EventArrived;
     public event Action<string>? Error;
 
-    public string ChannelName { get; private set; } = "";
-    public bool IsRunning => _watcher is not null;
+    /// <summary>Channels currently subscribed, in the order they were started.</summary>
+    public IReadOnlyCollection<string> Channels => _watchers.Keys.ToList();
+
+    public bool IsRunning => _watchers.Count > 0;
 
     /// <summary>Returns true if the channel exists on this machine.</summary>
     public static bool ChannelExists(string channel)
@@ -88,28 +91,47 @@ public sealed class EventLogService : IDisposable
         return events;
     }
 
-    /// <summary>Starts the real-time subscription for future events.</summary>
+    /// <summary>
+    /// Starts a real-time subscription for one channel. Safe to call for several
+    /// channels; each keeps its own watcher so one failing channel doesn't take
+    /// the others down. Throws if this channel is missing or unreadable.
+    /// </summary>
     public void Start(string channel)
     {
-        Stop();
-        ChannelName = channel;
+        if (_watchers.ContainsKey(channel)) return;
 
         var query = new EventLogQuery(channel, PathType.LogName);
         var watcher = new EventLogWatcher(query);
         watcher.EventRecordWritten += OnEventRecordWritten;
         watcher.Enabled = true; // throws if channel missing or access denied
-        _watcher = watcher;
+        _watchers[channel] = watcher;
     }
 
+    /// <summary>Stops one channel's subscription, leaving any others running.</summary>
+    public void StopChannel(string channel)
+    {
+        if (!_watchers.Remove(channel, out var watcher)) return;
+        DisposeWatcher(watcher);
+    }
+
+    /// <summary>Stops every subscription.</summary>
     public void Stop()
     {
-        var watcher = _watcher;
-        _watcher = null;
-        if (watcher is not null)
+        foreach (var watcher in _watchers.Values) DisposeWatcher(watcher);
+        _watchers.Clear();
+    }
+
+    private void DisposeWatcher(EventLogWatcher watcher)
+    {
+        try
         {
             watcher.Enabled = false;
             watcher.EventRecordWritten -= OnEventRecordWritten;
             watcher.Dispose();
+        }
+        catch
+        {
+            // A channel that vanished underneath us must not block shutdown.
         }
     }
 
@@ -136,6 +158,9 @@ public sealed class EventLogService : IDisposable
             var xml = record.ToXml();
             var data = ParseEventData(xml);
             var eventId = record.Id;
+            // Event IDs only mean something relative to their channel, so the
+            // channel rides along with every event and drives naming and rules.
+            var channel = record.LogName ?? "";
             var image = GetField(data, "Image");
             var parentImage = GetField(data, "ParentImage");
 
@@ -144,7 +169,8 @@ public sealed class EventLogService : IDisposable
                 RecordId = record.RecordId ?? 0,
                 TimeCreated = record.TimeCreated?.ToLocalTime() ?? DateTime.Now,
                 EventId = eventId,
-                TaskName = SysmonEvent.NameForEventId(eventId),
+                Channel = channel,
+                TaskName = SysmonEvent.NameForEventId(channel, eventId),
                 Summary = SysmonEvent.BuildSummary(data),
                 RawXml = xml,
                 Data = data,
@@ -153,7 +179,7 @@ public sealed class EventLogService : IDisposable
                 ProcessGuid = GetField(data, "ProcessGuid"),
                 ParentProcessGuid = GetField(data, "ParentProcessGuid"),
                 ParentImage = parentImage,
-                Hit = SuspicionRules.Evaluate(eventId, image, parentImage, data),
+                Hit = SuspicionRules.Evaluate(channel, eventId, image, parentImage, data),
             };
         }
         catch

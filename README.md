@@ -36,6 +36,9 @@ replaces it for the `Microsoft-Windows-Sysmon/Operational` channel with:
 - **Push-based streaming.** An `EventLogWatcher` subscription, not polling —
   events appear the instant Sysmon writes them, batched into the UI 4×/second so
   a noisy config doesn't stutter the grid.
+- **Multi-channel correlation.** Stream several logs into one merged,
+  time-ordered timeline — Sysmon process lineage next to PowerShell script
+  blocks, Security logons, and System service installs.
 - **A behavioral detection engine.** Every event is scored against a rule set as
   it arrives. Matches are colored by severity and explained in plain language.
 - **Process-tree reconstruction.** Parent→child lineage keyed by `ProcessGuid`,
@@ -60,10 +63,36 @@ If it ever returns, it will be a local open-weight model with no egress.
 ## Features
 
 **Live capture**
-- Push subscription with a 2,000-event history backfill on Start
+- Push subscription with a 2,000-event history backfill per channel on Start
 - Keeps the most recent 50,000 events in memory, dropping the oldest
 - Any event channel — the channel box is editable and pre-populated with Sysmon,
   PowerShell Operational, Defender, Task Scheduler, WMI-Activity, Security, System
+
+**Multi-channel timeline**
+
+Enter several channels comma-separated (or pick a preset) and they stream
+together into one chronologically merged view, with a **Channel** column and
+filter so every row's provenance is visible:
+
+```
+Microsoft-Windows-Sysmon/Operational, Microsoft-Windows-PowerShell/Operational
+```
+
+Presets cover the pairings that carry the most signal — Sysmon + PowerShell for
+script-based intrusions, Sysmon + Security for lateral movement, Sysmon + System
+for persistence (service installs land on System as event 7045, which Sysmon
+never sees).
+
+Each channel gets its own watcher, so one unreadable log doesn't abandon the
+others — the status bar reports what started and what was skipped. Backfill is
+merge-sorted across channels, and each live flush is ordered by timestamp before
+it hits the grid, because independent watchers deliver in arrival order rather
+than time order.
+
+**Event IDs are interpreted per channel.** Sysmon 7 is "Image Loaded" while
+System 7 is a disk driver event, so names resolve against the channel the event
+came from and unknown pairings stay `Event N` rather than borrowing another
+channel's meaning. Streaming Sysmon alongside System is safe.
 
 **Reading events**
 - Sysmon event IDs mapped to friendly names, with a one-line summary column that
@@ -109,6 +138,7 @@ built-in defaults and the status bar says which set loaded.
   "description": "Why it fired — tooltip, export, and analyst-facing text",
   "severity": "critical | high | medium | low",
   "eventIds": [1],                              // omit = all event IDs
+  "channels": ["Sysmon"],                       // omit = all channels
   "parent": "regex on PARENT exe filename",     // anchored to the whole name
   "child":  "regex on CHILD/Image exe filename",
   "all": [ { "field": "CommandLine", "regex": "…", "not": false } ],  // all must match
@@ -122,6 +152,13 @@ built-in defaults and the status bar says which set loaded.
 `ImageName`, `ParentImage`, `ParentImageName`, and `"Any"` (searches every field
 value — convenient for IOC sweeps, slower). Field regexes are substring matches;
 `parent`/`child` regexes are anchored to the whole filename.
+
+`channels` is an optional gate: a list of case-insensitive substrings matched
+against the event's channel. Omit it and the rule applies everywhere, which is
+usually what you want — a malicious command line is malicious whether it arrived
+as Sysmon Event 1 or Security 4688. Gate a rule when its event IDs or field
+names only mean something on one channel (`ImagePath` on System 7045,
+`ScriptBlockText` on PowerShell 4104).
 
 Rules are indexed by event ID at load, so scoping with `eventIds` keeps
 500,000-event `.evtx` loads fast.

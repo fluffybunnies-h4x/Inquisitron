@@ -136,9 +136,12 @@
             <!-- Two rows so the default window width doesn't clip the right end -->
             <StackPanel>
                 <DockPanel LastChildFill="False">
-                    <TextBlock Text="Channel:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="ChannelBox" Width="310" IsEditable="True"
-                              Text="Microsoft-Windows-Sysmon/Operational">
+                    <TextBlock Text="Channels:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <!-- Comma-separated: several channels stream into one merged,
+                         time-ordered timeline. The last items are hunt presets. -->
+                    <ComboBox x:Name="ChannelBox" Width="430" IsEditable="True"
+                              Text="Microsoft-Windows-Sysmon/Operational"
+                              ToolTip="One or more channels, comma-separated. Multiple channels merge into a single time-ordered view.">
                         <ComboBoxItem>Microsoft-Windows-Sysmon/Operational</ComboBoxItem>
                         <ComboBoxItem>Microsoft-Windows-PowerShell/Operational</ComboBoxItem>
                         <ComboBoxItem>Microsoft-Windows-Windows Defender/Operational</ComboBoxItem>
@@ -148,6 +151,11 @@
                         <ComboBoxItem>Microsoft-Windows-WMI-Activity/Operational</ComboBoxItem>
                         <ComboBoxItem>Security</ComboBoxItem>
                         <ComboBoxItem>System</ComboBoxItem>
+                        <Separator/>
+                        <ComboBoxItem ToolTip="Script-based intrusions: process lineage plus script block logging">Microsoft-Windows-Sysmon/Operational, Microsoft-Windows-PowerShell/Operational</ComboBoxItem>
+                        <ComboBoxItem ToolTip="Lateral movement: process lineage plus logons and share access">Microsoft-Windows-Sysmon/Operational, Security</ComboBoxItem>
+                        <ComboBoxItem ToolTip="Persistence: process lineage plus service installs (System 7045)">Microsoft-Windows-Sysmon/Operational, System</ComboBoxItem>
+                        <ComboBoxItem ToolTip="Full intrusion picture across the four highest-value channels">Microsoft-Windows-Sysmon/Operational, Microsoft-Windows-PowerShell/Operational, Security, System</ComboBoxItem>
                     </ComboBox>
 
                     <Button x:Name="StartStopButton" Content="▶ Start" Click="StartStopButton_Click" MinWidth="80"/>
@@ -264,6 +272,21 @@
                                      Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"/>
                         </DockPanel>
                     </DataGridTextColumn.Header>
+                </DataGridTextColumn>
+                <DataGridTextColumn Binding="{Binding ChannelName}" Width="95">
+                    <DataGridTextColumn.Header>
+                        <DockPanel>
+                            <TextBlock Text="Channel" DockPanel.Dock="Top"/>
+                            <TextBox Style="{StaticResource HeaderFilterBox}" Tag="Channel"
+                                     Loaded="HeaderFilter_Loaded" TextChanged="HeaderFilter_TextChanged"
+                                     ToolTip="Filter by channel, e.g. Sysmon or !Security"/>
+                        </DockPanel>
+                    </DataGridTextColumn.Header>
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FF9CDCFE"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
                 <DataGridTextColumn Binding="{Binding EventId}" Width="60">
                     <DataGridTextColumn.Header>

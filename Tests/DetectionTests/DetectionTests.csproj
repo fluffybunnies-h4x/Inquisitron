@@ -11,6 +11,7 @@
        the app ships with. SuspicionRules.cs has no WPF dependency. -->
   <ItemGroup>
     <Compile Include="..\..\Services\SuspicionRules.cs" Link="SuspicionRules.cs" />
+    <Compile Include="..\..\Models\SysmonEvent.cs" Link="SysmonEvent.cs" />
   </ItemGroup>
 
 </Project>

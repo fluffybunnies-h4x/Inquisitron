@@ -888,6 +888,91 @@
   },
 
   // ==========================================================================
+  // Cross-channel rules
+  //
+  // These use the optional "channels" gate: a list of case-insensitive
+  // substrings matched against the event's channel. Omit "channels" and a rule
+  // applies everywhere, which is usually what you want — a malicious command
+  // line is malicious whether it arrived as Sysmon 1 or Security 4688. Gate a
+  // rule when its event IDs or field names only mean something on one channel.
+  // ==========================================================================
+
+  {
+    "name": "Service installed from user-writable path",
+    "description": "System 7045 — a service was installed pointing at a binary in TEMP/AppData/Public/Downloads. This is the classic PsExec / Cobalt Strike / remote-exec footprint and runs as SYSTEM; Sysmon alone will not show it",
+    "severity": "critical",
+    "channels": ["System"],
+    "eventIds": [7045],
+    "any": [
+      { "field": "ImagePath", "regex": "\\\\AppData\\\\" },
+      { "field": "ImagePath", "regex": "\\\\Temp\\\\" },
+      { "field": "ImagePath", "regex": "\\\\Users\\\\Public\\\\" },
+      { "field": "ImagePath", "regex": "\\\\Downloads\\\\" },
+      { "field": "ImagePath", "regex": "\\\\ProgramData\\\\" },
+      { "field": "ImagePath", "regex": "(powershell|pwsh|cmd|wscript|cscript|rundll32|regsvr32)\\.exe" }
+    ]
+  },
+
+  {
+    "name": "Service installed",
+    "description": "System 7045 / Security 4697 — a new Windows service was registered. Routine during software installs, but the standard persistence and lateral-movement primitive; correlate against the Sysmon process tree at the same timestamp",
+    "severity": "medium",
+    "channels": ["System", "Security"],
+    "eventIds": [7045, 4697]
+  },
+
+  {
+    "name": "Event log cleared",
+    "description": "Security 1102 or System 104 — an event log was cleared. Almost never legitimate on a workstation and a strong anti-forensics signal; note that everything before it may be gone",
+    "severity": "critical",
+    "channels": ["Security", "System"],
+    "eventIds": [1102, 104]
+  },
+
+  {
+    "name": "PowerShell script block with evasion tradecraft",
+    "description": "PowerShell 4104 script block logging captured the decoded script body — this catches obfuscated payloads that never appear on a command line, so it sees what Sysmon Event 1 cannot",
+    "severity": "critical",
+    "channels": ["PowerShell"],
+    "eventIds": [4104],
+    "any": [
+      { "field": "ScriptBlockText", "regex": "amsiInitFailed" },
+      { "field": "ScriptBlockText", "regex": "AmsiUtils" },
+      { "field": "ScriptBlockText", "regex": "AmsiScanBuffer" },
+      { "field": "ScriptBlockText", "regex": "FromBase64String" },
+      { "field": "ScriptBlockText", "regex": "(Add|Set)-MpPreference[^\\n]*-Exclusion" },
+      { "field": "ScriptBlockText", "regex": "(DownloadString|DownloadFile|Invoke-WebRequest|Net\\.WebClient)" },
+      { "field": "ScriptBlockText", "regex": "Add-Type[^\\n]*-(Language|TypeDefinition)" },
+      { "field": "ScriptBlockText", "regex": "(VirtualAlloc|WriteProcessMemory|CreateRemoteThread|memcpy)" },
+      { "field": "ScriptBlockText", "regex": "PartOfDomain" }
+    ]
+  },
+
+  {
+    "name": "Defender protection disabled",
+    "description": "Defender's own Operational log reporting that real-time or scanning protection was turned off — the victim-side confirmation that a Defender-tampering command actually succeeded",
+    "severity": "critical",
+    "channels": ["Defender"],
+    "eventIds": [5001, 5004, 5010, 5012, 1119]
+  },
+
+  {
+    "name": "Explicit-credential logon",
+    "description": "Security 4648 — a process authenticated using credentials other than the logged-on user's. Normal for runas and some admin tooling, but this is what pass-the-hash and lateral movement look like from the target's side",
+    "severity": "medium",
+    "channels": ["Security"],
+    "eventIds": [4648]
+  },
+
+  {
+    "name": "Privileged group membership changed",
+    "description": "Security 4728/4732/4756 — an account was added to a security-enabled group. Correlate with recent process activity: a group change minutes after a suspicious spawn is a privilege-escalation footprint",
+    "severity": "high",
+    "channels": ["Security"],
+    "eventIds": [4728, 4732, 4756]
+  },
+
+  // ==========================================================================
   // Persistence (batch-script campaigns lean on these heavily)
   // ==========================================================================
 

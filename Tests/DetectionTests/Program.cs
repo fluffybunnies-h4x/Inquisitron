@@ -333,6 +333,101 @@ Expect("20. Stealer scripts self-deleted after exfiltration", "Script deleted it
     23, WSCRIPT, "",
     D(("Image", WSCRIPT), ("TargetFilename", $@"{PUBLIC}\mozilla.vbs")));
 
+Console.WriteLine("\n=== Cross-channel rules (multi-channel streaming) ===");
+
+const string SYSMON_CH = @"Microsoft-Windows-Sysmon/Operational";
+const string SECURITY_CH = "Security";
+const string SYSTEM_CH = "System";
+const string PS_CH = @"Microsoft-Windows-PowerShell/Operational";
+const string DEFENDER_CH = @"Microsoft-Windows-Windows Defender/Operational";
+
+void ExpectCh(string scenario, string expectedRule, string channel, int eid,
+              string image, string parent, List<KeyValuePair<string, string>> data)
+{
+    var hit = SuspicionRules.Evaluate(channel, eid, image, parent, data);
+    if (hit is not null && expectedRule.Split('|')
+            .Any(alt => hit.Name.Contains(alt.Trim(), StringComparison.OrdinalIgnoreCase)))
+    {
+        pass++;
+        Console.WriteLine($"  ok   {scenario}");
+        Console.WriteLine($"         -> [{hit.Severity}] {hit.Name}");
+    }
+    else
+    {
+        fail++;
+        Console.WriteLine($"  FAIL {scenario}");
+        Console.WriteLine($"         expected \"{expectedRule}\", got: {(hit is null ? "(no match)" : hit.Name)}");
+    }
+}
+
+void ExpectChClean(string scenario, string channel, int eid, string image, string parent,
+                   List<KeyValuePair<string, string>> data)
+{
+    var hit = SuspicionRules.Evaluate(channel, eid, image, parent, data);
+    if (hit is null) { pass++; Console.WriteLine($"  ok   {scenario} (correctly not flagged)"); }
+    else { fail++; Console.WriteLine($"  FAIL {scenario} — false positive: {hit.Name}"); }
+}
+
+ExpectCh("System 7045 — service installed from TEMP (PsExec-style)", "Service installed from user-writable path",
+    SYSTEM_CH, 7045, "", "",
+    D(("ServiceName", "mssecsvc"), ("ImagePath", @"C:\Users\demo\AppData\Local\Temp\svc.exe"),
+      ("ServiceType", "user mode service"), ("StartType", "auto start")));
+
+ExpectCh("System 7045 — service running powershell.exe directly", "Service installed from user-writable path",
+    SYSTEM_CH, 7045, "", "",
+    D(("ServiceName", "UpdateSvc"),
+      ("ImagePath", @"%COMSPEC% /c powershell.exe -nop -w hidden -enc SQBFAFgA")));
+
+ExpectCh("System 7045 — ordinary service install still surfaces at Medium", "Service installed",
+    SYSTEM_CH, 7045, "", "",
+    D(("ServiceName", "VendorAgent"), ("ImagePath", @"C:\Program Files\Vendor\agent.exe")));
+
+ExpectCh("Security 1102 — audit log cleared", "Event log cleared",
+    SECURITY_CH, 1102, "", "",
+    D(("SubjectUserName", "administrator"), ("SubjectDomainName", "CORP")));
+
+ExpectCh("PowerShell 4104 — AMSI bypass inside a script block", "script block with evasion tradecraft",
+    PS_CH, 4104, "", "",
+    D(("ScriptBlockText", @"[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)"),
+      ("Path", "")));
+
+ExpectCh("PowerShell 4104 — domain gate visible only in the script body", "script block with evasion tradecraft",
+    PS_CH, 4104, "", "",
+    D(("ScriptBlockText", @"if ((Get-WmiObject Win32_ComputerSystem).PartOfDomain) { Invoke-Payload }")));
+
+ExpectCh("Defender 5001 — realtime protection turned off", "Defender protection disabled",
+    DEFENDER_CH, 5001, "", "",
+    D(("Product Name", "Microsoft Defender Antivirus")));
+
+ExpectCh("Security 4732 — account added to a privileged local group", "Privileged group membership changed",
+    SECURITY_CH, 4732, "", "",
+    D(("TargetUserName", "Administrators"), ("MemberSid", "S-1-5-21-1-2-3-1104")));
+
+// The collision that motivated channel gating: System's low-ID driver events
+// must not be scored by Sysmon rules that share those IDs.
+ExpectChClean("System event 11 (disk driver) is not scored as a Sysmon file create",
+    SYSTEM_CH, 11, "", "",
+    D(("DriverName", @"\Device\Harddisk0\DR0"), ("Status", "0x0")));
+
+ExpectChClean("System event 7 (driver) is not scored as a Sysmon image load",
+    SYSTEM_CH, 7, "", "",
+    D(("DeviceName", @"\Device\Harddisk0"), ("Status", "0x0")));
+
+// Channel-gated rules must not fire on the wrong channel.
+ExpectChClean("Sysmon event 7045 does not trip the System service rule",
+    SYSMON_CH, 7045, "", "",
+    D(("ImagePath", @"C:\Users\demo\AppData\Local\Temp\svc.exe")));
+
+ExpectChClean("Ordinary Security logon stays clean", SECURITY_CH, 4624, "", "",
+    D(("TargetUserName", "demo"), ("LogonType", "2"), ("IpAddress", "-")));
+
+// Ungated rules still apply across channels — a bad command line is bad
+// whether Sysmon or Security reported it.
+ExpectCh("Security 4688 command line still scored by ungated rules", "Defender blinded to entire drive",
+    SECURITY_CH, 4688, @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "",
+    D(("NewProcessName", @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+      ("CommandLine", @"powershell -c ""Add-MpPreference -ExclusionPath 'C:\'""")));
+
 // Rules that lose severity ties in the kill-chain replays above, each probed
 // with an event only that rule matches — proving the rule itself is alive.
 Console.WriteLine("\n=== Rule isolation probes ===");
@@ -429,6 +524,61 @@ ExpectClean("Admin queries computer model via WMI", 1, PS, EXPLORER,
 ExpectClean("svchost.exe -p flag is not an archive password", 1, @"C:\Windows\System32\svchost.exe", @"C:\Windows\System32\services.exe",
     D(("Image", @"C:\Windows\System32\svchost.exe"),
       ("CommandLine", @"C:\WINDOWS\system32\svchost.exe -k LocalService -p -s CaptureService")));
+
+// Event IDs only mean something relative to their channel. This is the check
+// that makes streaming Sysmon alongside System safe: the same numeric ID must
+// resolve to different names, and an unknown pairing must stay unnamed rather
+// than borrowing another channel's meaning.
+Console.WriteLine("\n=== Channel-aware event naming ===");
+
+void ExpectName(string channel, int id, string expected)
+{
+    var actual = Inquisitron.Models.SysmonEvent.NameForEventId(channel, id);
+    var label = $"{Inquisitron.Models.SysmonEvent.ShortChannelName(channel)} {id}";
+    if (actual == expected)
+    {
+        pass++;
+        Console.WriteLine($"  ok   {label,-18} -> {actual}");
+    }
+    else
+    {
+        fail++;
+        Console.WriteLine($"  FAIL {label,-18} -> expected \"{expected}\", got \"{actual}\"");
+    }
+}
+
+// The exact collisions that would otherwise mislabel rows.
+ExpectName(SYSMON_CH, 7, "Image Loaded");
+ExpectName(SYSTEM_CH, 7, "Event 7");
+ExpectName(SYSMON_CH, 11, "File Create");
+ExpectName(SYSTEM_CH, 11, "Event 11");
+ExpectName(SYSMON_CH, 1, "Process Create");
+ExpectName(SECURITY_CH, 1, "Event 1");
+
+// Per-channel names that were previously all "Event N".
+ExpectName(SECURITY_CH, 4688, "Process Create");
+ExpectName(SECURITY_CH, 4624, "Logon");
+ExpectName(SECURITY_CH, 1102, "Audit Log Cleared");
+ExpectName(SYSTEM_CH, 7045, "Service Installed");
+ExpectName(PS_CH, 4104, "Script Block Logging");
+ExpectName(DEFENDER_CH, 1116, "Malware Detected");
+
+// Unknown pairings stay honest.
+ExpectName(SYSMON_CH, 9999, "Event 9999");
+ExpectName("Some-Unknown-Channel/Operational", 5, "Event 5");
+
+void ExpectShort(string channel, string expected)
+{
+    var actual = Inquisitron.Models.SysmonEvent.ShortChannelName(channel);
+    if (actual == expected) { pass++; Console.WriteLine($"  ok   short name: {expected}"); }
+    else { fail++; Console.WriteLine($"  FAIL short name: expected \"{expected}\", got \"{actual}\""); }
+}
+
+ExpectShort(SYSMON_CH, "Sysmon");
+ExpectShort(SECURITY_CH, "Security");
+ExpectShort(PS_CH, "PowerShell");
+ExpectShort(DEFENDER_CH, "Defender");
+ExpectShort("Microsoft-Windows-Bits-Client/Operational", "Bits-Client");
 
 Console.WriteLine($"\n{pass} passed, {fail} failed");
 Environment.Exit(fail == 0 ? 0 : 1);

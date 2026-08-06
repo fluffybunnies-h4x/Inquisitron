@@ -105,16 +105,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        var channel = ChannelBox.Text.Trim();
-        if (channel.Length == 0) return;
+        var requested = ParseChannelList(ChannelBox.Text);
+        if (requested.Count == 0) return;
 
-        if (!EventLogService.ChannelExists(channel))
+        var missing = requested.Where(c => !EventLogService.ChannelExists(c)).ToList();
+        var available = requested.Except(missing, StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (available.Count == 0)
         {
-            StatusText.Text = $"Channel not found: {channel}";
+            StatusText.Text = $"Channel not found: {string.Join(", ", missing)}";
             MessageBox.Show(
-                $"The event channel \"{channel}\" does not exist on this machine.\n\n" +
+                $"None of the requested channels exist on this machine:\n\n  {string.Join("\n  ", missing)}\n\n" +
                 "If you expected Sysmon logs, Sysmon is probably not installed. Install it from " +
-                "an elevated prompt:  sysmon64 -accepteula -i sysmonconfig.xml",
+                "an elevated prompt:  sysmon.exe -accepteula -i sysmonconfig.xml",
                 "Channel not found", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -128,43 +131,72 @@ public partial class MainWindow : Window
             _fileMode = false;
         }
 
-        try
+        // Backfill every channel first, then subscribe. Failures are collected
+        // per channel so one unreadable log doesn't abandon the others.
+        var backfill = new List<SysmonEvent>();
+        var started = new List<string>();
+        var failed = new List<string>(missing.Select(c => $"{c} (not found)"));
+
+        foreach (var channel in available)
         {
-            // Backfill recent history first, then subscribe for new events.
-            var recent = EventLogService.ReadRecent(channel, BackfillCount);
-            foreach (var evt in recent)
+            try
+            {
+                backfill.AddRange(EventLogService.ReadRecent(channel, BackfillCount));
+                _service.Start(channel);
+                started.Add(channel);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                failed.Add($"{channel} (access denied)");
+            }
+            catch (Exception ex)
+            {
+                failed.Add($"{channel} ({ex.Message})");
+            }
+        }
+
+        if (started.Count == 0)
+        {
+            _service.Stop();
+            StatusText.Text = $"Failed to start: {string.Join("; ", failed)}";
+            MessageBox.Show(
+                $"Could not subscribe to any channel:\n\n  {string.Join("\n  ", failed)}\n\n" +
+                "Sysmon and Security are readable by Administrators only. Right-click " +
+                "Inquisitron.exe and choose \"Run as administrator\", or add your account to " +
+                "the \"Event Log Readers\" group and grant the channel ACL.",
+                "Cannot start", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // The whole point of multi-channel is a single timeline, so the merged
+        // backfill has to be ordered by time rather than by channel.
+        backfill.Sort((a, b) => a.TimeCreated.CompareTo(b.TimeCreated));
+        using (_view?.DeferRefresh())
+        {
+            foreach (var evt in backfill)
             {
                 _events.Add(evt);
                 _tree.Apply(evt);
             }
-            _totalSeen += recent.Count;
-
-            _service.Start(channel);
         }
-        catch (UnauthorizedAccessException)
-        {
-            StatusText.Text = "Access denied";
-            MessageBox.Show(
-                $"Access denied reading \"{channel}\".\n\n" +
-                "Sysmon's log is only readable by Administrators. Right-click Inquisitron.exe " +
-                "and choose \"Run as administrator\", or add your account to the " +
-                "\"Event Log Readers\" group and grant the channel ACL.",
-                "Access denied", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Failed to start: {ex.Message}";
-            return;
-        }
+        _totalSeen += backfill.Count;
 
         _flushTimer.Start();
         ChannelBox.IsEnabled = false;
         StartStopButton.Content = "⏸ Stop";
-        StatusText.Text = $"Watching {channel}";
+        StatusText.Text = failed.Count == 0
+            ? $"Watching {started.Count} channel{(started.Count == 1 ? "" : "s")}: {string.Join(", ", started.Select(SysmonEvent.ShortChannelName))}"
+            : $"Watching {string.Join(", ", started.Select(SysmonEvent.ShortChannelName))} — skipped {string.Join("; ", failed)}";
         UpdateCounts();
         ScrollToEnd();
     }
+
+    /// <summary>Channel box accepts several channels separated by commas or semicolons.</summary>
+    private static List<string> ParseChannelList(string text) =>
+        text.Split(new[] { ',', ';' },
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private void StopWatching()
     {
@@ -193,7 +225,13 @@ public partial class MainWindow : Window
     {
         if (_incoming.IsEmpty) return;
 
-        while (_incoming.TryDequeue(out var evt))
+        // Drain first, then order by timestamp: each channel has its own watcher
+        // firing independently, so arrival order is not chronological order.
+        var batch = new List<SysmonEvent>();
+        while (_incoming.TryDequeue(out var queued)) batch.Add(queued);
+        if (batch.Count > 1) batch.Sort((a, b) => a.TimeCreated.CompareTo(b.TimeCreated));
+
+        foreach (var evt in batch)
         {
             _events.Add(evt);
             _tree.Apply(evt);
@@ -245,6 +283,7 @@ public partial class MainWindow : Window
             var value = column switch
             {
                 "Time" => evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+                "Channel" => evt.ChannelName,
                 "ID" => evt.EventId.ToString(),
                 "PID" => evt.Pid,
                 "PPID" => evt.ParentPid,
@@ -554,7 +593,7 @@ public partial class MainWindow : Window
         var flagged = 0;
         foreach (var evt in _events)
         {
-            var hit = SuspicionRules.Evaluate(evt.EventId, evt.GetData("Image"), evt.ParentImage, evt.Data);
+            var hit = SuspicionRules.Evaluate(evt.Channel, evt.EventId, evt.GetData("Image"), evt.ParentImage, evt.Data);
             evt.Hit = hit;
             if (hit is not null) flagged++;
 

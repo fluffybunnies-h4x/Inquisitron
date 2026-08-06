@@ -34,6 +34,8 @@ public static class SuspicionRules
         string Description,
         Severity Severity,
         int[]? EventIds,
+        /// <summary>Channel substrings this rule applies to; null = every channel.</summary>
+        string[]? Channels,
         Regex? Parent,
         Regex? Child,
         FieldMatch[] All,
@@ -151,6 +153,20 @@ public static class SuspicionRules
             if (item.TryGetProperty("eventIds", out var idsEl) && idsEl.ValueKind == JsonValueKind.Array)
                 eventIds = idsEl.EnumerateArray().Select(e => e.GetInt32()).ToArray();
 
+            // Optional channel gate. Omit it and the rule applies everywhere,
+            // which is usually right — a malicious command line is malicious
+            // whether it arrived as Sysmon 1 or Security 4688.
+            string[]? channels = null;
+            if (item.TryGetProperty("channels", out var chEl) && chEl.ValueKind == JsonValueKind.Array)
+            {
+                channels = chEl.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String)
+                    .Select(e => e.GetString()!)
+                    .Where(s => s.Length > 0)
+                    .ToArray();
+                if (channels.Length == 0) channels = null;
+            }
+
             var parentPattern = GetString(item, "parent");
             var childPattern = GetString(item, "child");
 
@@ -163,6 +179,7 @@ public static class SuspicionRules
                 description,
                 severity,
                 eventIds,
+                channels,
                 parentPattern is null ? null : NameRegex(parentPattern),
                 childPattern is null ? null : NameRegex(childPattern),
                 ParseMatches(item, "all"),
@@ -201,8 +218,20 @@ public static class SuspicionRules
 
     // ---- Evaluation ----
 
+    /// <summary>
+    /// Channel-agnostic evaluation — equivalent to an event whose channel is
+    /// unknown, so channel-gated rules are skipped.
+    /// </summary>
+    public static RuleHit? Evaluate(
+        int eventId,
+        string image,
+        string parentImage,
+        IReadOnlyList<KeyValuePair<string, string>> data) =>
+        Evaluate("", eventId, image, parentImage, data);
+
     /// <summary>Returns the highest-severity rule matching this event, or null if clean.</summary>
     public static RuleHit? Evaluate(
+        string channel,
         int eventId,
         string image,
         string parentImage,
@@ -232,9 +261,9 @@ public static class SuspicionRules
         // must not mask a Critical rule that applies to all events. On a severity
         // tie the scoped rule wins — it is the more specific detection.
         var scopedHit = _byEventId.TryGetValue(eventId, out var scoped)
-            ? FirstMatch(scoped, image, parentImage, data)
+            ? FirstMatch(scoped, channel, image, parentImage, data)
             : null;
-        var anyHit = FirstMatch(_anyEvent, image, parentImage, data);
+        var anyHit = FirstMatch(_anyEvent, channel, image, parentImage, data);
         if (scopedHit is null) return anyHit;
         if (anyHit is null) return scopedHit;
         return anyHit.Severity > scopedHit.Severity ? anyHit : scopedHit;
@@ -242,12 +271,15 @@ public static class SuspicionRules
 
     private static RuleHit? FirstMatch(
         Rule[] rules,
+        string channel,
         string image,
         string parentImage,
         IReadOnlyList<KeyValuePair<string, string>> data)
     {
         foreach (var rule in rules)
         {
+            if (rule.Channels is not null && !MatchesChannel(rule.Channels, channel)) continue;
+
             if (rule.Parent is not null &&
                 (parentImage.Length == 0 || !rule.Parent.IsMatch(FileName(parentImage)))) continue;
             if (rule.Child is not null &&
@@ -273,6 +305,17 @@ public static class SuspicionRules
             return new RuleHit(rule.Name, rule.Description, rule.Severity);
         }
         return null;
+    }
+
+    /// <summary>Channel gate: substring match, so "sysmon" covers the full channel path.</summary>
+    private static bool MatchesChannel(string[] wanted, string channel)
+    {
+        if (channel.Length == 0) return false; // unknown channel can't satisfy a gate
+        foreach (var w in wanted)
+        {
+            if (channel.Contains(w, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     private static bool MatchField(
@@ -330,12 +373,12 @@ public static class SuspicionRules
 
     /// <summary>Parent→child spawn rule on Event ID 1.</summary>
     private static Rule Spawn(string name, string parent, string child, string description, Severity severity) =>
-        new(name, description, severity, new[] { 1 }, NameRegex(parent), NameRegex(child),
+        new(name, description, severity, new[] { 1 }, null, NameRegex(parent), NameRegex(child),
             Array.Empty<FieldMatch>(), Array.Empty<FieldMatch>());
 
     /// <summary>Command-line rule on Event ID 1: any one of the patterns fires it.</summary>
     private static Rule Cmd(string name, string description, Severity severity, string childPattern, params string[] anyPatterns) =>
-        new(name, description, severity, new[] { 1 }, null,
+        new(name, description, severity, new[] { 1 }, null, null,
             childPattern.Length == 0 ? null : NameRegex(childPattern),
             Array.Empty<FieldMatch>(),
             anyPatterns.Select(p => new FieldMatch("CommandLine", FieldRegex(p), false)).ToArray());
@@ -415,7 +458,7 @@ public static class SuspicionRules
         // ---- SmartScreen / Explorer tampering ----
         new("SmartScreen disabled",
             "Registry write disabling SmartScreen reputation checks or Defender policy",
-            Severity.Critical, new[] { 12, 13 }, null, null,
+            Severity.Critical, new[] { 12, 13 }, null, null, null,
             Array.Empty<FieldMatch>(),
             new[]
             {
@@ -431,7 +474,7 @@ public static class SuspicionRules
         // ---- Suspicious drops ----
         new("Executable dropped in user-writable path",
             "Executable or installer written to TEMP, Public, or Downloads",
-            Severity.Medium, new[] { 11 }, null, null,
+            Severity.Medium, new[] { 11 }, null, null, null,
             new[] { new FieldMatch("TargetFilename", FieldRegex(@"\.(exe|msi|dll|scr|ps1|vbs|bat|cmd)$"), false) },
             new[]
             {

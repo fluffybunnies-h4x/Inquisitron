@@ -13,6 +13,13 @@ public sealed class SysmonEvent : INotifyPropertyChanged
     public long RecordId { get; init; }
     public DateTime TimeCreated { get; init; }
     public int EventId { get; init; }
+
+    /// <summary>Channel this event came from, e.g. "Microsoft-Windows-Sysmon/Operational".</summary>
+    public string Channel { get; init; } = "";
+
+    /// <summary>Short channel label for the grid column ("Sysmon", "Security", …).</summary>
+    public string ChannelName => ShortChannelName(Channel);
+
     public string TaskName { get; init; } = "";
     public string Summary { get; init; } = "";
     public string RawXml { get; init; } = "";
@@ -126,8 +133,162 @@ public sealed class SysmonEvent : INotifyPropertyChanged
         "DestinationIp", "ImageLoaded", "PipeName", "Details", "State",
     };
 
+    /// <summary>Hunting-relevant Security channel events.</summary>
+    private static readonly Dictionary<int, string> SecurityEventNames = new()
+    {
+        [1102] = "Audit Log Cleared",
+        [4624] = "Logon",
+        [4625] = "Logon Failed",
+        [4634] = "Logoff",
+        [4648] = "Logon With Explicit Credentials",
+        [4672] = "Special Privileges Assigned",
+        [4688] = "Process Create",
+        [4689] = "Process Exit",
+        [4697] = "Service Installed",
+        [4698] = "Scheduled Task Created",
+        [4699] = "Scheduled Task Deleted",
+        [4702] = "Scheduled Task Updated",
+        [4720] = "User Account Created",
+        [4726] = "User Account Deleted",
+        [4728] = "Member Added To Global Group",
+        [4732] = "Member Added To Local Group",
+        [4756] = "Member Added To Universal Group",
+        [4768] = "Kerberos TGT Requested",
+        [4769] = "Kerberos Service Ticket Requested",
+        [4776] = "NTLM Authentication",
+        [5140] = "Network Share Accessed",
+        [5145] = "Network Share Access Checked",
+    };
+
+    /// <summary>Microsoft-Windows-PowerShell/Operational.</summary>
+    private static readonly Dictionary<int, string> PowerShellOperationalNames = new()
+    {
+        [4100] = "Engine Error",
+        [4103] = "Module Logging (Pipeline)",
+        [4104] = "Script Block Logging",
+        [4105] = "Script Start",
+        [4106] = "Script Stop",
+    };
+
+    /// <summary>The classic "Windows PowerShell" log.</summary>
+    private static readonly Dictionary<int, string> PowerShellClassicNames = new()
+    {
+        [400] = "Engine State Changed To Available",
+        [403] = "Engine State Changed To Stopped",
+        [500] = "Command Started",
+        [501] = "Command Stopped",
+        [600] = "Provider Lifecycle",
+        [800] = "Pipeline Execution Details",
+    };
+
+    /// <summary>System channel — service control and event log lifecycle.</summary>
+    private static readonly Dictionary<int, string> SystemEventNames = new()
+    {
+        [41] = "Kernel Power (Unexpected Restart)",
+        [104] = "Event Log Cleared",
+        [1074] = "Shutdown Initiated",
+        [6005] = "Event Log Service Started",
+        [6006] = "Event Log Service Stopped",
+        [6008] = "Unexpected Shutdown",
+        [7034] = "Service Terminated Unexpectedly",
+        [7036] = "Service State Changed",
+        [7040] = "Service Start Type Changed",
+        [7045] = "Service Installed",
+    };
+
+    /// <summary>Microsoft-Windows-Windows Defender/Operational.</summary>
+    private static readonly Dictionary<int, string> DefenderEventNames = new()
+    {
+        [1006] = "Malware Detected",
+        [1007] = "Action Taken On Malware",
+        [1008] = "Action On Malware Failed",
+        [1015] = "Suspicious Behavior Detected",
+        [1116] = "Malware Detected",
+        [1117] = "Action Taken On Malware",
+        [1118] = "Action On Malware Failed",
+        [1119] = "Critical Action Failure",
+        [5001] = "Realtime Protection Disabled",
+        [5004] = "Realtime Protection Configuration Changed",
+        [5007] = "Defender Configuration Changed",
+        [5010] = "Malware Scanning Disabled",
+        [5012] = "Virus Scanning Disabled",
+    };
+
+    /// <summary>Microsoft-Windows-TaskScheduler/Operational.</summary>
+    private static readonly Dictionary<int, string> TaskSchedulerEventNames = new()
+    {
+        [100] = "Task Started",
+        [102] = "Task Completed",
+        [106] = "Task Registered",
+        [129] = "Task Created Process",
+        [140] = "Task Updated",
+        [141] = "Task Deleted",
+        [200] = "Action Started",
+        [201] = "Action Completed",
+    };
+
+    /// <summary>Microsoft-Windows-WMI-Activity/Operational.</summary>
+    private static readonly Dictionary<int, string> WmiActivityEventNames = new()
+    {
+        [5857] = "Provider Started",
+        [5858] = "Query Error",
+        [5859] = "ESS Operation",
+        [5860] = "Temporary Event Subscription",
+        [5861] = "Permanent Event Subscription",
+    };
+
+    /// <summary>
+    /// Channel matchers, most specific first. Event IDs are only meaningful
+    /// relative to their channel — Sysmon 7 is "Image Loaded" while System 7 is
+    /// a disk driver event — so naming must never be done on the ID alone.
+    /// </summary>
+    private static readonly (string Match, string Short, Dictionary<int, string> Names)[] ChannelTables =
+    {
+        ("sysmon",                 "Sysmon",        (Dictionary<int, string>)SysmonEventNames),
+        ("windows defender",       "Defender",      DefenderEventNames),
+        ("powershell/operational", "PowerShell",    PowerShellOperationalNames),
+        ("windows powershell",     "PowerShell",    PowerShellClassicNames),
+        ("taskscheduler",          "TaskSched",     TaskSchedulerEventNames),
+        ("wmi-activity",           "WMI",           WmiActivityEventNames),
+        ("security",               "Security",      SecurityEventNames),
+        ("system",                 "System",        SystemEventNames),
+    };
+
+    /// <summary>Short label for the Channel column; falls back to the leaf of the channel path.</summary>
+    public static string ShortChannelName(string channel)
+    {
+        if (channel.Length == 0) return "";
+        foreach (var (match, shortName, _) in ChannelTables)
+        {
+            if (channel.Contains(match, StringComparison.OrdinalIgnoreCase)) return shortName;
+        }
+        // "Microsoft-Windows-Foo/Operational" -> "Foo"
+        var trimmed = channel;
+        var slash = trimmed.IndexOf('/');
+        if (slash > 0) trimmed = trimmed[..slash];
+        const string prefix = "Microsoft-Windows-";
+        if (trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) trimmed = trimmed[prefix.Length..];
+        return trimmed;
+    }
+
+    /// <summary>Sysmon-relative name. Prefer the channel-aware overload.</summary>
     public static string NameForEventId(int id) =>
         SysmonEventNames.TryGetValue(id, out var name) ? name : $"Event {id}";
+
+    /// <summary>
+    /// Friendly name for an event ID *within its channel*. Unknown combinations
+    /// return "Event {id}" rather than borrowing another channel's meaning —
+    /// an honestly unnamed row beats a confidently mislabeled one.
+    /// </summary>
+    public static string NameForEventId(string channel, int id)
+    {
+        foreach (var (match, _, names) in ChannelTables)
+        {
+            if (!channel.Contains(match, StringComparison.OrdinalIgnoreCase)) continue;
+            return names.TryGetValue(id, out var name) ? name : $"Event {id}";
+        }
+        return $"Event {id}";
+    }
 
     public static string BuildSummary(IReadOnlyList<KeyValuePair<string, string>> data)
     {
