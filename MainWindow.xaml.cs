@@ -171,14 +171,7 @@ public partial class MainWindow : Window
         // The whole point of multi-channel is a single timeline, so the merged
         // backfill has to be ordered by time rather than by channel.
         backfill.Sort((a, b) => a.TimeCreated.CompareTo(b.TimeCreated));
-        using (_view?.DeferRefresh())
-        {
-            foreach (var evt in backfill)
-            {
-                _events.Add(evt);
-                _tree.Apply(evt);
-            }
-        }
+        BulkAdd(backfill);
         _totalSeen += backfill.Count;
 
         _flushTimer.Start();
@@ -244,6 +237,34 @@ public partial class MainWindow : Window
 
         UpdateCounts();
         ScrollToEnd();
+    }
+
+    /// <summary>
+    /// Appends many events at once, detaching the grid so it doesn't re-render
+    /// per row.
+    ///
+    /// Deliberately does NOT use ICollectionView.DeferRefresh(): adding to the
+    /// source collection while a refresh is deferred makes ListCollectionView
+    /// adjust currency, which reads CurrentPosition and throws
+    /// "Cannot change or check the contents or Current position of
+    /// CollectionView while Refresh is being deferred". Detaching the grid gets
+    /// the same rendering win without touching currency.
+    /// </summary>
+    private void BulkAdd(IReadOnlyList<SysmonEvent> events)
+    {
+        EventGrid.ItemsSource = null;
+        try
+        {
+            foreach (var evt in events)
+            {
+                _events.Add(evt);
+                _tree.Apply(evt);
+            }
+        }
+        finally
+        {
+            EventGrid.ItemsSource = _view;
+        }
     }
 
     private void ScrollToEnd()
@@ -525,14 +546,7 @@ public partial class MainWindow : Window
             var loaded = await Task.Run(() => EventLogService.ReadFile(path, MaxFileEvents,
                 n => Dispatcher.BeginInvoke(() => StatusText.Text = $"Loading {name}… {n:N0} events")));
 
-            using (_view?.DeferRefresh())
-            {
-                foreach (var evt in loaded)
-                {
-                    _events.Add(evt);
-                    _tree.Apply(evt);
-                }
-            }
+            BulkAdd(loaded);
             _totalSeen = loaded.Count;
 
             StatusText.Text = loaded.Count >= MaxFileEvents
