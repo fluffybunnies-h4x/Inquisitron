@@ -190,6 +190,11 @@ Lessons that cost real false positives:
 The shipped rule set includes behavioral packs derived from published Securonix
 Threat Research advisories:
 
+- **[SMOKE#SCREEN](https://www.securonix.com/blog/smoke-screen-screenconnect-rmm-abuse-cloudflare-tunnels/)**
+  — ScreenConnect RMM abuse delivered by a `zoom-update.vbs` XOR dropper and a
+  Defender-killing `SystemCheck` batch, staged over Cloudflare Quick Tunnels and
+  Dropbox, ending in a legitimately signed ConnectWise agent beaconing to the
+  operator's relay.
 - **[FAUX#ELEVATE](https://www.securonix.com/blog/faux-elevate-threat-actors-crypto-miners-and-infostealers/)**
   — French CV-lure VBS dropper with a WMI `PartOfDomain` gate that delivers its
   payload only to domain-joined enterprise hosts, then ChromElevator credential
