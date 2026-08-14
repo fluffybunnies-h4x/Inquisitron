@@ -50,6 +50,12 @@ replaces it for the `Microsoft-Windows-Sysmon/Operational` channel with:
 
 It runs as a single self-contained executable with no .NET install required.
 
+<p align="center">
+  <img src="InquisitronGUI.png" alt="Inquisitron streaming Sysmon and PowerShell into one merged timeline, with detections flagged and a process-lineage view open" width="100%">
+</p>
+
+<p align="center"><em>Sysmon and PowerShell streamed into one time-ordered view — DEAD#VAX detections flagged in red, with the process-lineage window reconstructing the kill chain.</em></p>
+
 ## No network egress, by design
 
 Inquisitron reads local event logs and writes local files. It makes **no
